@@ -373,6 +373,109 @@ def q3_graph_vs_data(rows) -> None:
         print(f"    {fmt(e):>8} {fmt(i):>8} {fmt(c):>9}   {verdict}")
 
 
+def heal_stats(rows, meta) -> dict | None:
+    """Reduce a quiesce run to before / during / after-chaos means.
+
+    Returns None for runs without a quiesce window.
+    """
+    if not meta or not meta.get("quiesce"):
+        return None
+    t0, t1 = meta.get("chaos_start_rel"), meta.get("chaos_stop_rel")
+    if t0 is None or t1 is None:
+        return None
+
+    phases = {"pre": [], "during": [], "post0_30": [],
+              "post30_60": [], "post60p": []}
+    for r in rows:
+        if r["reachable"] != "1":
+            continue
+        t = _f(r, "t_rel")
+        c, e = _f(r, "completeness"), _f(r, "e2e_recall")
+        if np.isnan(t) or np.isnan(c):
+            continue
+        if t < t0:
+            k = "pre"
+        elif t < t1:
+            k = "during"
+        else:
+            dt = t - t1
+            k = ("post0_30" if dt < 30 else
+                 "post30_60" if dt < 60 else "post60p")
+        phases[k].append((c, e))
+
+    out = {}
+    for k, vals in phases.items():
+        out[k] = {
+            "completeness": nanmean([v[0] for v in vals]),
+            "e2e_recall": nanmean([v[1] for v in vals]),
+            "n": len(vals),
+        }
+
+    pre_c = out["pre"]["completeness"]
+    last = next((out[k] for k in ("post60p", "post30_60", "post0_30")
+                 if out[k]["n"] > 0), None)
+    out["healed"] = (
+        None if (last is None or np.isnan(pre_c))
+        else bool(last["completeness"] >= pre_c - 0.005))
+    out["deficit"] = (
+        float("nan") if (last is None or np.isnan(pre_c))
+        else pre_c - last["completeness"])
+    return out
+
+
+def qheal_recovery(rows, meta) -> None:
+    """Does the cluster heal once the failures stop?
+
+    Runs with faults throughout measure a steady state: ongoing damage
+    balanced against whatever repair exists. That cannot distinguish "damage
+    is being repaired as fast as it accrues" from "damage accumulates and
+    nothing repairs it". Stopping the faults and continuing to watch does.
+
+    Completeness is the right metric here -- unlike recall it does not drift
+    with index size, and a healthy cluster holds it at exactly 1.0000.
+    """
+    h = heal_stats(rows, meta)
+    if h is None:
+        return
+
+    print("\n" + "=" * 72)
+    print("QH  Does the cluster heal after the failures stop?")
+    print("=" * 72)
+    print(f"  chaos window: {meta['chaos_start_rel']:.0f}s -> "
+          f"{meta['chaos_stop_rel']:.0f}s")
+    print()
+    print(f"  {'phase':<22} {'n':>4} {'completeness':>13} {'e2e_recall':>12}")
+    print("  " + "-" * 54)
+    labels = [("pre", "before chaos"), ("during", "during chaos"),
+              ("post0_30", "0-30s after stop"),
+              ("post30_60", "30-60s after stop"),
+              ("post60p", ">60s after stop")]
+    for key, label in labels:
+        p = h[key]
+        if p["n"] == 0:
+            continue
+        print(f"  {label:<22} {p['n']:>4} {fmt(p['completeness']):>13} "
+              f"{fmt(p['e2e_recall']):>12}")
+
+    print()
+    if h["healed"] is None:
+        print("  Not enough samples in one of the phases to judge.")
+    elif h["healed"]:
+        print("  HEALS: completeness returns to its pre-chaos level once")
+        print("  faults stop. The divergence is transient, and the thesis")
+        print("  weakens considerably -- a transient gap is far less")
+        print("  interesting than a permanent one.")
+    else:
+        print(f"  DOES NOT HEAL: completeness is still {fmt(h['deficit'])} "
+              f"short of")
+        print("  its pre-chaos level well after the last fault. A replica")
+        print("  that missed writes while it was down never gets them back:")
+        print("  no anti-entropy, no read-repair, no catch-up. Every query")
+        print("  routed there returns silently worse results, indefinitely.")
+        print()
+        print("  This is the headline result if it holds across seeds.")
+
+
 def q0_drift(rows) -> None:
     """Is recall stable over the run, independent of faults?
 
@@ -505,6 +608,7 @@ def main() -> int:
     print(f"  unreachable samples: {unreachable}/{len(rows)} "
           f"({100.0 * unreachable / max(len(rows), 1):.1f}%)")
 
+    qheal_recovery(rows, meta)
     q0_drift(rows)
     qsize_recall_vs_index_size(
         rows, compare_rows,

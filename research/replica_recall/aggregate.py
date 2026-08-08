@@ -24,7 +24,7 @@ import numpy as np
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 
-from analyze import load, summarize_run, SIZE_BIN, fmt        # noqa: E402
+from analyze import load, summarize_run, heal_stats, SIZE_BIN, fmt        # noqa: E402
 
 
 # ---------------------------------------------------------------------------
@@ -77,7 +77,7 @@ def mann_whitney(a: list[float], b: list[float]) -> tuple[float, float]:
 
 # ---------------------------------------------------------------------------
 
-RUN_RE = re.compile(r"^seed(\d+)_(baseline|chaos)$")
+RUN_RE = re.compile(r"^seed(\d+)_(baseline|chaos|quiesce)$")
 
 
 def discover(sweep_dir: str) -> dict[str, list[tuple[int, dict]]]:
@@ -86,7 +86,8 @@ def discover(sweep_dir: str) -> dict[str, list[tuple[int, dict]]]:
               file=sys.stderr)
         sys.exit(1)
 
-    out: dict[str, list[tuple[int, dict]]] = {"baseline": [], "chaos": []}
+    out: dict[str, list[tuple[int, dict]]] = {
+        "baseline": [], "chaos": [], "quiesce": []}
     for name in sorted(os.listdir(sweep_dir)):
         m = RUN_RE.match(name)
         if not m:
@@ -95,9 +96,68 @@ def discover(sweep_dir: str) -> dict[str, list[tuple[int, dict]]]:
         if not os.path.exists(os.path.join(path, "samples.csv")):
             print(f"  (skipping {name}: no samples.csv)")
             continue
-        rows, _, _ = load(path)
-        out[m.group(2)].append((int(m.group(1)), summarize_run(rows)))
+        rows, _, meta = load(path)
+        s = summarize_run(rows)
+        s["heal"] = heal_stats(rows, meta)
+        out[m.group(2)].append((int(m.group(1)), s))
     return out
+
+
+def report_healing(runs) -> None:
+    """Pool the quiesce runs: does completeness come back after faults stop?"""
+    quiesce = [(s, r["heal"]) for s, r in runs["quiesce"] if r.get("heal")]
+    if not quiesce:
+        return
+
+    print("\n" + "=" * 78)
+    print("Healing -- quiesce runs (faults stopped mid-run)")
+    print("=" * 78)
+    print(f"  {'seed':>10} {'pre':>9} {'during':>9} {'after':>9} "
+          f"{'deficit':>9} {'healed':>8}")
+    print("  " + "-" * 60)
+
+    pre_all, post_all, deficits, healed_flags = [], [], [], []
+    for seed, h in quiesce:
+        last = next((h[k] for k in ("post60p", "post30_60", "post0_30")
+                     if h[k]["n"] > 0), None)
+        if last is None:
+            continue
+        pre_c = h["pre"]["completeness"]
+        dur_c = h["during"]["completeness"]
+        pre_all.append(pre_c)
+        post_all.append(last["completeness"])
+        deficits.append(h["deficit"])
+        healed_flags.append(bool(h["healed"]))
+        print(f"  {seed:>10} {fmt(pre_c):>9} {fmt(dur_c):>9} "
+              f"{fmt(last['completeness']):>9} {fmt(h['deficit']):>9} "
+              f"{('yes' if h['healed'] else 'NO'):>8}")
+
+    if not deficits:
+        return
+    print()
+    print(f"  mean pre-chaos completeness  : {fmt(float(np.mean(pre_all)))}")
+    print(f"  mean post-chaos completeness : {fmt(float(np.mean(post_all)))}")
+    print(f"  residual deficit             : {fmt(float(np.mean(deficits)))} "
+          f"(range {fmt(min(deficits))} to {fmt(max(deficits))})")
+    print()
+    # No p-value here on purpose. Pre and post are paired within a run, and
+    # pre is 1.0000 in every healthy run -- an unpaired rank test on a
+    # constant would report the floor regardless of the effect and would be
+    # meaningless. The deficit and its range are the honest summary; the
+    # per-run healed/NO column is the finding.
+    n_healed = sum(healed_flags)
+    n_runs = len(healed_flags)
+    if n_healed == n_runs:
+        print(f"  HEALS in {n_healed}/{n_runs} runs -- completeness returns to")
+        print("  its pre-chaos level. The divergence is transient, and the")
+        print("  permanent-degradation claim does not hold.")
+    elif n_healed == 0:
+        print(f"  DOES NOT HEAL in any of {n_runs} runs. Replicas that missed")
+        print("  writes never recover them: no anti-entropy, no read-repair,")
+        print("  no catch-up. This is the reportable result.")
+    else:
+        print(f"  MIXED: healed in {n_healed}/{n_runs} runs. Worth understanding")
+        print("  what differs between them before claiming either way.")
 
 
 METRICS = [
@@ -119,15 +179,22 @@ def main() -> int:
 
     runs = discover(args.sweep_dir)
     nb, nc = len(runs["baseline"]), len(runs["chaos"])
+    nq = len(runs["quiesce"])
 
     print("=" * 78)
     print("Seed sweep -- baseline vs chaos")
     print("=" * 78)
     print(f"  baseline runs : {nb}   seeds {[s for s, _ in runs['baseline']]}")
     print(f"  chaos runs    : {nc}   seeds {[s for s, _ in runs['chaos']]}")
+    if nq:
+        print(f"  quiesce runs  : {nq}   seeds {[s for s, _ in runs['quiesce']]}")
 
     if nb < 2 or nc < 2:
-        print("\n  Need at least 2 runs per condition. Run sweep.py.")
+        print("\n  Need at least 2 baseline and 2 chaos runs for the")
+        print("  condition comparison. Run sweep.py.")
+        # Quiesce runs stand on their own -- report them even when the
+        # baseline/chaos comparison cannot be made yet.
+        report_healing(runs)
         return 1
 
     print()
@@ -189,6 +256,8 @@ def main() -> int:
         print()
         print(f"  mean size-matched delta: {fmt(float(np.mean(deltas)))} "
               f"over {len(deltas)} bins")
+
+    report_healing(runs)
 
     # ---- verdict ------------------------------------------------------------
     print("\n" + "=" * 78)

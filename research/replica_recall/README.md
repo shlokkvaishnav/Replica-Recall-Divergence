@@ -122,6 +122,36 @@ in a healthy cluster: HNSW insertion order differs per replica, so the graphs
 are genuinely different. Without the no-chaos noise floor you cannot claim any
 observed divergence was caused by failure.
 
+## The healing test (the decisive one)
+
+A run with faults throughout measures a **steady state**: ongoing damage
+balanced against whatever repair exists. It cannot distinguish "damage is
+repaired as fast as it accrues" from "damage accumulates and nothing repairs
+it". Those are wildly different systems, and the difference is what matters
+in production.
+
+The quiesce protocol separates them — settle, inject faults for a window,
+then **stop** and keep watching:
+
+```bash
+python research/replica_recall/run_experiment.py --duration 300 --chaos-duration 120
+python research/replica_recall/analyze.py          # see the QH section
+```
+
+Timeline: `--pre-chaos-s` (default 30) settling → `--chaos-duration` of faults
+→ the remainder as recovery. Everything killed is restarted at the moment
+chaos stops, so a still-down node cannot masquerade as a failure to heal.
+
+`completeness` is the metric to watch, not recall: unlike recall it does not
+drift with index size, and a healthy cluster holds it at exactly 1.0000, so
+the target is unambiguous.
+
+- Returns to 1.0 → the system self-heals; divergence is transient and the
+  thesis weakens considerably.
+- Stays short → **a replica that missed writes while down never gets them
+  back.** No anti-entropy, no read-repair, no catch-up. Every query routed
+  there silently returns worse results, indefinitely.
+
 ## The seed sweep (what you actually report)
 
 A single baseline run and a single chaos run are one observation each. The
@@ -130,7 +160,8 @@ resamples the whole experiment. Nothing here should be written up from a
 single pair of runs.
 
 ```bash
-python research/replica_recall/sweep.py --seeds 5      # ~60 min for 10 runs
+python research/replica_recall/sweep.py --seeds 5                  # ~60 min, 10 runs
+python research/replica_recall/sweep.py --seeds 5 --with-quiesce   # adds the healing test
 python research/replica_recall/aggregate.py
 ```
 

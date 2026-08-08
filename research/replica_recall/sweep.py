@@ -34,9 +34,9 @@ RESULTS_DIR = os.path.join(HERE, "results")
 RUNNER = os.path.join(HERE, "run_experiment.py")
 
 
-def run_one(seed: int, chaos: bool, duration: int, writers: int,
-            extra: list[str], force: bool) -> tuple[bool, str]:
-    cond = "chaos" if chaos else "baseline"
+def run_one(seed: int, cond: str, duration: int, writers: int,
+            chaos_duration: int, extra: list[str],
+            force: bool) -> tuple[bool, str]:
     dest = os.path.join(SWEEP_DIR, f"seed{seed}_{cond}")
 
     if os.path.exists(os.path.join(dest, "samples.csv")) and not force:
@@ -46,8 +46,11 @@ def run_one(seed: int, chaos: bool, duration: int, writers: int,
            "--duration", str(duration),
            "--writers", str(writers),
            "--seed", str(seed)]
-    if not chaos:
+    if cond == "baseline":
         cmd.append("--no-chaos")
+    elif cond == "quiesce":
+        # faults for a window, then stopped -- the healing test
+        cmd += ["--chaos-duration", str(chaos_duration)]
     cmd += extra
 
     # Each run starts from a clean results dir so a crashed run cannot leave
@@ -83,15 +86,26 @@ def main() -> int:
     ap.add_argument("--seed-base", type=int, default=20260808)
     ap.add_argument("--duration", type=int, default=300)
     ap.add_argument("--writers", type=int, default=4)
-    ap.add_argument("--only", choices=("baseline", "chaos"), default=None,
-                    help="run only one condition")
+    ap.add_argument("--only", choices=("baseline", "chaos", "quiesce"),
+                    default=None, help="run only one condition")
+    ap.add_argument("--with-quiesce", action="store_true",
+                    help="also run the healing test: faults for "
+                         "--chaos-duration seconds, then stopped")
+    ap.add_argument("--chaos-duration", type=int, default=120,
+                    help="quiesce condition: length of the fault window "
+                         "(default 120; the rest of --duration is recovery)")
     ap.add_argument("--force", action="store_true",
                     help="re-run even if results already exist")
     args, extra = ap.parse_known_args()
 
     os.makedirs(SWEEP_DIR, exist_ok=True)
     seeds = [args.seed_base + i for i in range(args.seeds)]
-    conditions = ([args.only] if args.only else ["baseline", "chaos"])
+    if args.only:
+        conditions = [args.only]
+    else:
+        conditions = ["baseline", "chaos"]
+        if args.with_quiesce:
+            conditions.append("quiesce")
 
     total = len(seeds) * len(conditions)
     # +20s warmup and ~25s of startup/teardown per run.
@@ -105,8 +119,8 @@ def main() -> int:
     done = 0
     for seed in seeds:
         for cond in conditions:
-            ok, msg = run_one(seed, cond == "chaos", args.duration,
-                              args.writers, extra, args.force)
+            ok, msg = run_one(seed, cond, args.duration, args.writers,
+                              args.chaos_duration, extra, args.force)
             done += 1
             print(f"  [{done}/{total}] {msg}", flush=True)
             if not ok:

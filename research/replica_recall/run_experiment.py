@@ -228,7 +228,21 @@ def main() -> int:
     ap.add_argument("--seed", type=int, default=20260808)
     ap.add_argument("--no-chaos", action="store_true",
                     help="baseline run: measure divergence with no faults")
+    ap.add_argument("--chaos-duration", type=int, default=None,
+                    help="quiesce protocol: inject faults for this many "
+                         "seconds, then STOP and keep sampling for the rest "
+                         "of --duration. Answers whether the cluster heals. "
+                         "Omit for faults throughout (a steady-state measure, "
+                         "which cannot answer that).")
+    ap.add_argument("--pre-chaos-s", type=float, default=30.0,
+                    help="quiesce protocol only: settle-and-sample window "
+                         "before faults start, giving a within-run reference")
     args = ap.parse_args()
+
+    if args.chaos_duration is not None and args.no_chaos:
+        print("ERROR: --chaos-duration and --no-chaos are contradictory.",
+              file=sys.stderr)
+        return 1
 
     if not os.path.exists(ch.SHARD_NODE_BIN) or not os.path.exists(ch.COORDINATOR_BIN):
         print(f"ERROR: binaries not found ({ch.SHARD_NODE_BIN}, "
@@ -307,17 +321,77 @@ def main() -> int:
     st.start()
     threads.append(st)
 
-    if not args.no_chaos:
-        ct = threading.Thread(target=ch.chaos_loop,
-                              args=(stop_evt, procs, chaos_events), daemon=True)
-        ct.start()
-        threads.append(ct)
-        print(f"[rr] chaos ON, running {args.duration}s...")
-    else:
-        print(f"[rr] baseline (no chaos), running {args.duration}s...")
+    chaos_start_rel = None
+    chaos_stop_rel = None
 
     try:
-        time.sleep(args.duration)
+        if args.no_chaos:
+            print(f"[rr] baseline (no chaos), running {args.duration}s...")
+            time.sleep(args.duration)
+
+        elif args.chaos_duration is None:
+            # Unchanged behaviour: faults for the whole run. This measures a
+            # steady state -- ongoing damage balanced against whatever repair
+            # exists -- and so cannot answer whether the cluster heals.
+            ct = threading.Thread(target=ch.chaos_loop,
+                                  args=(stop_evt, procs, chaos_events),
+                                  daemon=True)
+            ct.start()
+            threads.append(ct)
+            chaos_start_rel = time.time() - t_start
+            print(f"[rr] chaos ON for the whole run, {args.duration}s...")
+            time.sleep(args.duration)
+            chaos_stop_rel = time.time() - t_start
+
+        else:
+            # Quiesce protocol: settle, break things, then STOP breaking them
+            # and keep watching. The question this exists to answer is whether
+            # a replica that missed writes while it was down ever gets them
+            # back, or stays silently short forever.
+            pre = args.pre_chaos_s
+            post = args.duration - pre - args.chaos_duration
+            if post <= 0:
+                print(f"[rr] FATAL: --duration {args.duration} leaves no "
+                      f"quiesce window after --pre-chaos-s {pre} + "
+                      f"--chaos-duration {args.chaos_duration}.",
+                      file=sys.stderr)
+                stop_evt.set()
+                for p in procs.values():
+                    p.kill()
+                return 1
+
+            print(f"[rr] phase 1/3: {pre:.0f}s settling, no faults...")
+            time.sleep(pre)
+
+            chaos_stop_evt = threading.Event()
+            ct = threading.Thread(target=ch.chaos_loop,
+                                  args=(chaos_stop_evt, procs, chaos_events),
+                                  daemon=True)
+            ct.start()
+            threads.append(ct)
+            chaos_start_rel = time.time() - t_start
+            print(f"[rr] phase 2/3: {args.chaos_duration:.0f}s chaos...")
+            time.sleep(args.chaos_duration)
+
+            chaos_stop_evt.set()
+            ct.join(timeout=15.0)
+
+            # chaos_loop restarts whatever it last killed before exiting, but
+            # make certain: a node still down would be scored as unreachable
+            # for the whole quiesce window and would mask the healing signal.
+            revived = 0
+            for name, p in procs.items():
+                if not p.is_alive():
+                    p.start()
+                    revived += 1
+            chaos_stop_rel = time.time() - t_start
+            if revived:
+                print(f"[rr]   ({revived} process(es) restarted at chaos stop)")
+
+            print(f"[rr] phase 3/3: {post:.0f}s quiesce -- faults stopped, "
+                  f"watching for recovery...")
+            time.sleep(post)
+
     except KeyboardInterrupt:
         print("\n[rr] interrupted, shutting down early")
 
@@ -357,6 +431,15 @@ def main() -> int:
         "metric": args.metric,
         "seed": args.seed,
         "chaos": not args.no_chaos,
+        # Present only for quiesce runs; analyze.py keys the healing report
+        # off these, so their absence means "no quiesce window".
+        "chaos_duration_s": args.chaos_duration,
+        "pre_chaos_s": args.pre_chaos_s if args.chaos_duration else None,
+        "chaos_start_rel": (round(chaos_start_rel, 3)
+                            if chaos_start_rel is not None else None),
+        "chaos_stop_rel": (round(chaos_stop_rel, 3)
+                           if chaos_stop_rel is not None else None),
+        "quiesce": args.chaos_duration is not None,
         "num_shards": ch.NUM_SHARDS,
         "replicas_per_shard": ch.REPLICAS_PER_SHARD,
         "vector_dim": ch.VECTOR_DIM,
