@@ -14,6 +14,7 @@
 #include <omp.h>
 #include <mutex>
 #include <memory>
+#include <atomic>
 
 namespace nanodb {
 
@@ -42,11 +43,6 @@ namespace nanodb {
         {
             metadata_storage_.open_file(meta_path);
 
-            std::random_device rd;
-            rng_.seed(rd());
-
-            size_t current_count = 0;
-
             FileHeader* header = get_header();
             if (header->magic != NANODB_MAGIC) {
                 // Fresh file — initialize header
@@ -54,20 +50,19 @@ namespace nanodb {
                 header->element_count = 0;
                 header->entry_point_id = -1;
                 header->max_layer = -1;
-                entry_point_id_ = -1;
+                entry_point_id_ = NO_ENTRY;
                 current_max_layer_ = -1;
                 element_count_ = 0;
-                current_count = 0;
             } else {
                 // Existing index — restore state from header
                 entry_point_id_ = header->entry_point_id;
                 current_max_layer_ = header->max_layer;
                 element_count_ = header->element_count;
-                current_count = element_count_;
             }
 
-            node_locks_.reserve(current_count + 10000);
-            for (size_t i = 0; i < current_count + 10000; ++i) {
+            // Fixed stripe pool -- see LOCK_STRIPES.
+            node_locks_.reserve(LOCK_STRIPES);
+            for (size_t i = 0; i < LOCK_STRIPES; ++i) {
                 node_locks_.push_back(std::make_unique<SpinLock>());
             }
         }
@@ -80,19 +75,25 @@ namespace nanodb {
             int level = get_random_level();
             Node new_node(id, level, vec_data);
 
-            // Expand storage if needed (double-checked locking)
+            // Expand storage if needed (double-checked locking).
+            //
+            // The lock array used to be grown here too, nested inside this
+            // branch. Storage growth and lock coverage are independent, and
+            // tying them together meant that whenever the file was
+            // pre-allocated large enough to avoid a resize -- the shard node
+            // opens 100 MB up front, room for ~94k nodes -- node_locks_ never
+            // grew past its initial 10,000. add_link() then silently returned
+            // for every src >= node_locks_.size(), so EVERY node past id
+            // 10,000 was inserted with zero neighbours and was unreachable.
+            //
+            // Measured: recall@10 held at 0.85 through 10k vectors and fell
+            // off a cliff to 0.21 at 20k. node_locks_ is a fixed stripe pool
+            // now, so there is nothing left to fall behind.
             size_t offset = HEADER_SIZE + (size_t)id * sizeof(Node);
             if (offset + sizeof(Node) > storage_.get_size()) {
                 std::lock_guard<std::mutex> lock(global_resize_lock_);
                 if (offset + sizeof(Node) > storage_.get_size()) {
                     storage_.resize(storage_.get_size() + 10 * 1024 * 1024);
-                    if (id >= node_locks_.size()) {
-                        size_t target_size = id + 10000;
-                        node_locks_.reserve(target_size);
-                        for (size_t i = node_locks_.size(); i < target_size; ++i) {
-                            node_locks_.push_back(std::make_unique<SpinLock>());
-                        }
-                    }
                 }
             }
 
@@ -100,9 +101,9 @@ namespace nanodb {
             *node_ptr = new_node;
 
             // Handle first element
-            if (entry_point_id_ == -1) {
+            if (entry_point_id_ == NO_ENTRY) {
                 std::lock_guard<std::mutex> lock(init_lock_);
-                if (entry_point_id_ == -1) {
+                if (entry_point_id_ == NO_ENTRY) {
                     entry_point_id_ = id;
                     current_max_layer_ = level;
                     #pragma omp atomic
@@ -133,7 +134,7 @@ namespace nanodb {
             }
 
             // Connect neighbors at each layer
-            for (int l = std::min(level, current_max_layer_); l >= 0; l--) {
+            for (int l = std::min(level, current_max_layer_.load()); l >= 0; l--) {
                 std::priority_queue<Result> candidates =
                     search_layer(curr_obj, node_ptr->vector, config::EF_CONSTRUCTION, l);
 
@@ -159,12 +160,8 @@ namespace nanodb {
                 }
                 std::reverse(ordered.begin(), ordered.end());
 
-                std::vector<id_t> selected_neighbors;
-                for (const Result& cand : ordered) {
-                    if (selected_neighbors.size() >= (size_t)config::M) break;
-                    if (cand.id == id) continue;   // never link a node to itself
-                    selected_neighbors.push_back(cand.id);
-                }
+                std::vector<id_t> selected_neighbors =
+                    select_neighbors_heuristic(ordered, (size_t)config::M, id);
 
                 for (id_t neighbor_id : selected_neighbors) {
                     add_link(id, neighbor_id, l);
@@ -174,9 +171,17 @@ namespace nanodb {
                 if (!selected_neighbors.empty()) curr_obj = selected_neighbors[0];
             }
 
+            // Double-checked under init_lock_: two threads inserting
+            // high-level nodes concurrently could both pass a bare check and
+            // race, leaving entry_point_id_ and current_max_layer_ describing
+            // different nodes -- an entry point claiming a layer it has no
+            // links on, which strands every subsequent descent.
             if (level > current_max_layer_) {
-                entry_point_id_ = id;
-                current_max_layer_ = level;
+                std::lock_guard<std::mutex> lock(init_lock_);
+                if (level > current_max_layer_) {
+                    entry_point_id_ = id;
+                    current_max_layer_ = level;
+                }
             }
 
             #pragma omp atomic
@@ -194,7 +199,7 @@ namespace nanodb {
         // Deleted (tombstoned) nodes are silently skipped.
         // -----------------------------------------------------------------------
         std::vector<Result> search(const std::vector<float>& query, int k) {
-            if (entry_point_id_ == -1) return {};
+            if (entry_point_id_ == NO_ENTRY) return {};
 
             id_t curr_obj = entry_point_id_;
             float dist = compute_distance(query.data(), get_node(curr_obj)->vector,
@@ -291,13 +296,28 @@ namespace nanodb {
         MMapHandler& storage_;
         MetadataHandler metadata_storage_;
         DistanceMetric metric_;
-        id_t entry_point_id_ = -1;
-        int current_max_layer_ = -1;
+        // Sentinel for "no entry point yet". id_t is unsigned, so spell it
+        // once here rather than comparing against a bare -1 at each use.
+        static constexpr id_t NO_ENTRY = (id_t)-1;
+
+        // Atomic because search() and insert() read these on every call
+        // without holding init_lock_; only the update path takes the lock.
+        std::atomic<id_t> entry_point_id_{NO_ENTRY};
+        std::atomic<int> current_max_layer_{-1};
         size_t element_count_ = 0;
-        std::mt19937 rng_;
         std::mutex init_lock_;
 
+        // Striped lock pool, sized once at construction. The previous scheme
+        // kept one lock per node and grew the vector as ids advanced, which
+        // had two defects: it could silently fall behind (see insert()), and
+        // growing a vector while other threads index into it is a
+        // reallocation race. A fixed pool cannot do either. Stripe collisions
+        // just serialise two unrelated nodes briefly; add_link holds one lock
+        // at a time and never nests, so sharing cannot deadlock.
+        static constexpr size_t LOCK_STRIPES = 4096;
         std::vector<std::unique_ptr<SpinLock>> node_locks_;
+
+        SpinLock& lock_for(id_t id) { return *node_locks_[id % LOCK_STRIPES]; }
         std::mutex global_resize_lock_;
 
         FileHeader* get_header() {
@@ -316,8 +336,14 @@ namespace nanodb {
         }
 
         int get_random_level() {
+            // std::mt19937 is not thread-safe, and insert() is called
+            // concurrently -- a shared engine here was a data race on every
+            // parallel insert. Per-thread engines remove it. Measured impact
+            // was real: at matched index size, 4 concurrent writers reached
+            // materially lower recall than a single writer.
+            static thread_local std::mt19937 tls_rng{std::random_device{}()};
             std::uniform_real_distribution<double> dist(0.0, 1.0);
-            double r = dist(rng_);
+            double r = dist(tls_rng);
             int level = 0;
             // Node::neighbors is [MAX_LAYERS][M_MAX0], so the highest legal
             // layer index is MAX_LAYERS - 1. The bound here used to be
@@ -331,7 +357,7 @@ namespace nanodb {
             // silent memory corruption when it does.
             while (r < 0.03 && level < MAX_LAYERS - 1) {
                 level++;
-                r = dist(rng_);
+                r = dist(tls_rng);
             }
             return level;
         }
@@ -395,9 +421,59 @@ namespace nanodb {
             return found_results;
         }
 
+        // ---------------------------------------------------------------
+        // HNSW Algorithm 4 -- SELECT-NEIGHBORS-HEURISTIC.
+        //
+        // Keeping simply the M *closest* candidates looks reasonable and is
+        // catastrophically wrong at scale: every long-range link gets evicted
+        // as nearer nodes arrive, neighbourhoods become locally clustered,
+        // and greedy search can no longer traverse the graph. Measured here,
+        // recall fell from 0.94 at 3k vectors to 0.61 at 12.5k on a
+        // single-writer, fault-free cluster with completeness at 1.0 -- a
+        // collapse purely in N.
+        //
+        // The heuristic keeps a candidate only if it is closer to the base
+        // element than to any already-selected neighbour. That admits a
+        // distant candidate lying in a direction not yet covered, while
+        // rejecting a near one that merely duplicates an existing link, so
+        // long-range connectivity survives. This is what hnswlib's
+        // getNeighborsByHeuristic2 implements.
+        //
+        // `ordered` must be sorted nearest-first and each Result::distance
+        // must be the distance to the base element being linked.
+        std::vector<id_t> select_neighbors_heuristic(const std::vector<Result>& ordered,
+                                                      size_t max_keep,
+                                                      id_t exclude_id) {
+            std::vector<id_t> selected;
+            selected.reserve(max_keep);
+
+            // With no more candidates than slots there is nothing to choose
+            // between: pruning here would only under-connect a young graph.
+            const bool keep_all = ordered.size() <= max_keep;
+
+            for (const Result& cand : ordered) {
+                if (selected.size() >= max_keep) break;
+                if (cand.id == exclude_id) continue;
+
+                if (!keep_all) {
+                    const float* cand_vec = get_node(cand.id)->vector;
+                    bool keep = true;
+                    for (id_t chosen : selected) {
+                        float d_to_chosen = compute_distance(
+                            cand_vec, get_node(chosen)->vector,
+                            config::VECTOR_DIM, metric_);
+                        if (d_to_chosen < cand.distance) { keep = false; break; }
+                    }
+                    if (!keep) continue;
+                }
+                selected.push_back(cand.id);
+            }
+            return selected;
+        }
+
         void add_link(id_t src, id_t dest, int layer) {
-            if (src >= node_locks_.size()) return;
-            node_locks_[src]->lock();
+            SpinLock& guard = lock_for(src);
+            guard.lock();
 
             Node* node = get_node(src);
             int count = node->neighbor_counts[layer];
@@ -407,24 +483,48 @@ namespace nanodb {
                 node->neighbors[layer][count] = dest;
                 node->neighbor_counts[layer]++;
             } else {
-                // Replace the farthest neighbor if the new one is closer
-                float dest_dist = compute_distance(node->vector, get_node(dest)->vector,
-                                                   config::VECTOR_DIM, metric_);
-                float max_d = -1.0f;
-                int max_idx = -1;
-
+                // Full. Re-select from {existing neighbours} u {dest} using
+                // the same diversity heuristic, rather than evicting whichever
+                // neighbour happens to be farthest.
+                //
+                // Eviction-by-distance is the more damaging half of the
+                // closest-M bug: it strips long-range links out of an
+                // *established* node's list every time a nearer node appears
+                // beside it. Over an insert stream that steadily removes the
+                // graph's shortcuts, which is why recall decayed as a function
+                // of N rather than staying flat.
+                bool already_linked = false;
                 for (int i = 0; i < count; ++i) {
-                    float d = compute_distance(node->vector, get_node(node->neighbors[layer][i])->vector,
-                                               config::VECTOR_DIM, metric_);
-                    if (d > max_d) { max_d = d; max_idx = i; }
+                    if (node->neighbors[layer][i] == dest) { already_linked = true; break; }
                 }
 
-                if (dest_dist < max_d && max_idx != -1) {
-                    node->neighbors[layer][max_idx] = dest;
+                if (!already_linked) {
+                    std::vector<Result> cands;
+                    cands.reserve((size_t)count + 1);
+                    for (int i = 0; i < count; ++i) {
+                        id_t n = node->neighbors[layer][i];
+                        cands.push_back({n, compute_distance(node->vector, get_node(n)->vector,
+                                                              config::VECTOR_DIM, metric_), ""});
+                    }
+                    cands.push_back({dest, compute_distance(node->vector, get_node(dest)->vector,
+                                                             config::VECTOR_DIM, metric_), ""});
+                    std::sort(cands.begin(), cands.end(),
+                              [](const Result& a, const Result& b) {
+                                  return a.distance < b.distance;
+                              });
+
+                    // May return fewer than max_conn: the heuristic drops
+                    // redundant links, freeing slots for diverse ones later.
+                    std::vector<id_t> kept =
+                        select_neighbors_heuristic(cands, (size_t)max_conn, src);
+                    for (size_t i = 0; i < kept.size(); ++i) {
+                        node->neighbors[layer][i] = kept[i];
+                    }
+                    node->neighbor_counts[layer] = (int)kept.size();
                 }
             }
 
-            node_locks_[src]->unlock();
+            guard.unlock();
         }
     };
 
