@@ -80,6 +80,94 @@ def fmt(x: float, nd: int = 4) -> str:
 
 # ---------------------------------------------------------------------------
 
+SIZE_BIN = 2500
+
+
+def _recall_by_size(rows) -> dict[int, tuple[float, float, int]]:
+    """Bin (e2e_recall, index_recall) by index size. Fixed-width bins so two
+    runs land on the same edges and can be compared directly."""
+    buckets: dict[int, list[tuple[float, float]]] = {}
+    for r in rows:
+        if r["reachable"] != "1":
+            continue
+        n, e, i = _f(r, "n_local"), _f(r, "e2e_recall"), _f(r, "index_recall")
+        if np.isnan(n) or np.isnan(e):
+            continue
+        buckets.setdefault(int(n // SIZE_BIN), []).append((e, i))
+    out = {}
+    for b, vals in buckets.items():
+        es = [v[0] for v in vals]
+        idx = [v[1] for v in vals if not np.isnan(v[1])]
+        out[b] = (float(np.mean(es)),
+                  float(np.mean(idx)) if idx else float("nan"),
+                  len(vals))
+    return out
+
+
+def qsize_recall_vs_index_size(rows, compare_rows=None,
+                               label="this run", compare_label="compare") -> None:
+    """Recall as a function of index size -- the curve everything else needs.
+
+    Every cross-run comparison in this experiment (Q1's spread, Q4's hit rate)
+    is confounded by index size, because recall depends strongly on it and
+    runs reach different sizes. Binning by n_local puts two runs on the same
+    x-axis so they can be compared where they actually overlap.
+    """
+    print("\n" + "=" * 72)
+    print("QS  Recall vs index size" + (f"   [{label} vs {compare_label}]"
+                                        if compare_rows else ""))
+    print("=" * 72)
+
+    a = _recall_by_size(rows)
+    b = _recall_by_size(compare_rows) if compare_rows is not None else None
+
+    if not a:
+        print("  no scored samples")
+        return
+
+    keys = sorted(set(a) | (set(b) if b else set()))
+
+    if b is None:
+        print(f"  {'index size':>16} {'e2e':>8} {'index':>8} {'n':>6}")
+        print("  " + "-" * 42)
+        for kbin in keys:
+            if kbin not in a:
+                continue
+            e, i, n = a[kbin]
+            lo, hi = kbin * SIZE_BIN, (kbin + 1) * SIZE_BIN
+            print(f"  {lo:>7,}-{hi:<8,} {fmt(e):>8} {fmt(i):>8} {n:>6}")
+        print()
+        print("  A falling column is the index degrading with N, not with")
+        print("  faults. Flat is what a correct HNSW should look like.")
+        return
+
+    print(f"  {'index size':>16} {label[:10]:>11} {compare_label[:10]:>11} "
+          f"{'delta':>9}")
+    print("  " + "-" * 52)
+    overlap = []
+    for kbin in keys:
+        lo, hi = kbin * SIZE_BIN, (kbin + 1) * SIZE_BIN
+        ea = a.get(kbin, (float("nan"),) * 3)[0]
+        eb = b.get(kbin, (float("nan"),) * 3)[0]
+        d = ea - eb if not (np.isnan(ea) or np.isnan(eb)) else float("nan")
+        if not np.isnan(d):
+            overlap.append(d)
+        print(f"  {lo:>7,}-{hi:<8,} {fmt(ea):>11} {fmt(eb):>11} {fmt(d):>9}")
+
+    print()
+    if overlap:
+        print(f"  overlapping bins: {len(overlap)}   "
+              f"mean delta {fmt(float(np.mean(overlap)))}")
+        print()
+        print("  This is the only size-controlled comparison available. If the")
+        print("  delta is ~0, the two runs differ only in how far they got,")
+        print("  and any Q1/Q4 difference between them is a size artefact.")
+    else:
+        print("  No overlapping size bins -- the runs never reached comparable")
+        print("  index sizes, so they cannot be compared. Match --duration and")
+        print("  --writers, or run longer.")
+
+
 def q1_intra_shard_spread(rows) -> None:
     print("\n" + "=" * 72)
     print("Q1  Do replicas of the same shard disagree at the same instant?")
@@ -342,9 +430,13 @@ def q4_can_we_spot_the_bad_replica(rows) -> None:
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--results-dir", default=os.path.join(HERE, "results"))
+    ap.add_argument("--compare-dir", default=None,
+                    help="a second results dir to overlay in QS, binned by "
+                         "index size (the only size-controlled comparison)")
     args = ap.parse_args()
 
     rows, events, meta = load(args.results_dir)
+    compare_rows = load(args.compare_dir)[0] if args.compare_dir else None
 
     print("=" * 72)
     print("Replica recall divergence under failure -- Layer 1 results")
@@ -364,6 +456,11 @@ def main() -> int:
           f"({100.0 * unreachable / max(len(rows), 1):.1f}%)")
 
     q0_drift(rows)
+    qsize_recall_vs_index_size(
+        rows, compare_rows,
+        label=os.path.basename(args.results_dir.rstrip("/\\")) or "this run",
+        compare_label=(os.path.basename(args.compare_dir.rstrip("/\\"))
+                       if args.compare_dir else "compare"))
     q1_intra_shard_spread(rows)
     q2_recall_around_failover(rows, events)
     q3_graph_vs_data(rows)
