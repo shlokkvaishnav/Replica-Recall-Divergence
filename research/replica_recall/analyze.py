@@ -168,11 +168,9 @@ def qsize_recall_vs_index_size(rows, compare_rows=None,
         print("  --writers, or run longer.")
 
 
-def q1_intra_shard_spread(rows) -> None:
-    print("\n" + "=" * 72)
-    print("Q1  Do replicas of the same shard disagree at the same instant?")
-    print("=" * 72)
-
+def _intra_shard_spreads(rows) -> tuple[list[float], list[float], list[float]]:
+    """Per-instant within-shard spread of e2e_recall. Shared by Q1 and the
+    cross-seed aggregator so the two can never drift apart."""
     by_ts: dict[tuple[str, str], list[float]] = {}
     for r in rows:
         if r["reachable"] != "1":
@@ -183,12 +181,96 @@ def q1_intra_shard_spread(rows) -> None:
         by_ts.setdefault((r["t_rel"], r["shard"]), []).append(v)
 
     spreads, mins, maxes = [], [], []
-    for (_, _), vals in by_ts.items():
+    for vals in by_ts.values():
         if len(vals) < 2:
             continue
         spreads.append(max(vals) - min(vals))
         mins.append(min(vals))
         maxes.append(max(vals))
+    return spreads, mins, maxes
+
+
+def _detection_stats(rows) -> dict | None:
+    """Q4's numbers as data rather than print output."""
+    groups: dict[tuple[str, str], list[tuple[str, float, float]]] = {}
+    for r in rows:
+        if r["reachable"] != "1":
+            continue
+        loo, e2e = _f(r, "loo_agreement"), _f(r, "e2e_recall")
+        if np.isnan(loo) or np.isnan(e2e):
+            continue
+        groups.setdefault((r["t_rel"], r["shard"]), []).append(
+            (r["name"], loo, e2e))
+
+    usable = [g for g in groups.values() if len(g) >= 3]
+    if len(usable) < 5:
+        return None
+
+    hits, spearmans, margins = 0, [], []
+    for g in usable:
+        if min(g, key=lambda x: x[1])[0] == min(g, key=lambda x: x[2])[0]:
+            hits += 1
+        loo_v = np.asarray([x[1] for x in g])
+        e2e_v = np.asarray([x[2] for x in g])
+        if loo_v.std() > 1e-9 and e2e_v.std() > 1e-9:
+            spearmans.append(float(np.corrcoef(
+                np.argsort(np.argsort(loo_v)), np.argsort(np.argsort(e2e_v)))[0, 1]))
+        srt = sorted(x[2] for x in g)
+        margins.append(srt[1] - srt[0])
+
+    n_rep = float(np.mean([len(g) for g in usable]))
+    return {
+        "groups": len(usable),
+        "n_replicas": n_rep,
+        "hit_rate": hits / len(usable),
+        "chance": 1.0 / n_rep,
+        "rank_corr": float(np.mean(spearmans)) if spearmans else float("nan"),
+        "margin": float(np.mean(margins)),
+    }
+
+
+def summarize_run(rows) -> dict:
+    """One row of numbers per experiment run, for cross-seed aggregation."""
+    spreads, _, _ = _intra_shard_spreads(rows)
+    det = _detection_stats(rows) or {}
+
+    idx, comp, e2e = [], [], []
+    for r in rows:
+        if r["reachable"] != "1":
+            continue
+        i, c, e = (_f(r, "index_recall"), _f(r, "completeness"),
+                   _f(r, "e2e_recall"))
+        if not np.isnan(i):
+            idx.append(i)
+        if not np.isnan(c):
+            comp.append(c)
+        if not np.isnan(e):
+            e2e.append(e)
+
+    total = len(rows)
+    unreach = sum(1 for r in rows if r["reachable"] != "1")
+    return {
+        "spread_mean": float(np.mean(spreads)) if spreads else float("nan"),
+        "spread_p95": (float(np.percentile(spreads, 95))
+                       if spreads else float("nan")),
+        "index_recall": nanmean(idx),
+        "completeness": nanmean(comp),
+        "e2e_recall": nanmean(e2e),
+        "hit_rate": det.get("hit_rate", float("nan")),
+        "rank_corr": det.get("rank_corr", float("nan")),
+        "margin": det.get("margin", float("nan")),
+        "chance": det.get("chance", float("nan")),
+        "unreachable_frac": unreach / total if total else float("nan"),
+        "by_size": _recall_by_size(rows),
+    }
+
+
+def q1_intra_shard_spread(rows) -> None:
+    print("\n" + "=" * 72)
+    print("Q1  Do replicas of the same shard disagree at the same instant?")
+    print("=" * 72)
+
+    spreads, mins, maxes = _intra_shard_spreads(rows)
 
     if not spreads:
         print("  no instants with >=2 reachable replicas of the same shard")
@@ -360,54 +442,22 @@ def q4_can_we_spot_the_bad_replica(rows) -> None:
     print("Q4  Can cross-replica comparison identify the degraded replica?")
     print("=" * 72)
 
-    groups: dict[tuple[str, str], list[tuple[str, float, float]]] = {}
-    for r in rows:
-        if r["reachable"] != "1":
-            continue
-        loo, e2e = _f(r, "loo_agreement"), _f(r, "e2e_recall")
-        if np.isnan(loo) or np.isnan(e2e):
-            continue
-        groups.setdefault((r["t_rel"], r["shard"]), []).append(
-            (r["name"], loo, e2e))
-
-    usable = [g for g in groups.values() if len(g) >= 3]
-    if len(usable) < 5:
-        print(f"  only {len(usable)} groups with >=3 scored replicas.")
+    det = _detection_stats(rows)
+    if det is None:
+        print("  fewer than 5 groups with >=3 scored replicas.")
         print("  (loo_agreement needs 3+ reachable replicas in a shard; with")
         print("   2 it is identical for both by construction.)")
         print("  If this run predates the loo_agreement column, re-run.")
         return
 
-    hits = 0
-    spearmans = []
-    margins = []
-    for g in usable:
-        loo_min = min(g, key=lambda x: x[1])[0]
-        e2e_min = min(g, key=lambda x: x[2])[0]
-        if loo_min == e2e_min:
-            hits += 1
+    rate, chance, n_rep = det["hit_rate"], det["chance"], det["n_replicas"]
 
-        loo_v = np.asarray([x[1] for x in g])
-        e2e_v = np.asarray([x[2] for x in g])
-        if loo_v.std() > 1e-9 and e2e_v.std() > 1e-9:
-            lr = np.argsort(np.argsort(loo_v))
-            er = np.argsort(np.argsort(e2e_v))
-            spearmans.append(float(np.corrcoef(lr, er)[0, 1]))
-
-        srt = sorted(x[2] for x in g)
-        margins.append(srt[1] - srt[0])          # gap between worst and next
-
-    n_rep = float(np.mean([len(g) for g in usable]))
-    chance = 1.0 / n_rep
-    rate = hits / len(usable)
-
-    print(f"  groups scored           : {len(usable)}")
+    print(f"  groups scored           : {det['groups']}")
     print(f"  mean replicas per group : {n_rep:.1f}")
     print(f"  worst-replica hit rate  : {fmt(rate)}   (chance {fmt(chance)})")
     print(f"  lift over chance        : {fmt(rate / chance, 2)}x")
-    if spearmans:
-        print(f"  within-group rank corr  : {fmt(float(np.mean(spearmans)))}")
-    print(f"  mean true recall margin : {fmt(float(np.mean(margins)))}"
+    print(f"  within-group rank corr  : {fmt(det['rank_corr'])}")
+    print(f"  mean true recall margin : {fmt(det['margin'])}"
           "   (worst vs next-worst)")
     print()
 

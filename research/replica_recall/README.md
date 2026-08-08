@@ -122,6 +122,35 @@ in a healthy cluster: HNSW insertion order differs per replica, so the graphs
 are genuinely different. Without the no-chaos noise floor you cannot claim any
 observed divergence was caused by failure.
 
+## The seed sweep (what you actually report)
+
+A single baseline run and a single chaos run are one observation each. The
+seed controls both the query set and the chaos kill schedule, so varying it
+resamples the whole experiment. Nothing here should be written up from a
+single pair of runs.
+
+```bash
+python research/replica_recall/sweep.py --seeds 5      # ~60 min for 10 runs
+python research/replica_recall/aggregate.py
+```
+
+`sweep.py` is resumable — a run whose directory already holds `samples.csv`
+is skipped, so an interrupted sweep restarts where it stopped. Pass `--force`
+to redo everything.
+
+`aggregate.py` reduces each run to one row of numbers and compares the
+conditions with an **exact two-sided Mann-Whitney U test**. Rank-based rather
+than a t-test: five runs per condition is far too few to lean on normality,
+and these metrics are bounded proportions. Note the floor — with 5 vs 5 the
+smallest attainable p is 2/252 = 0.0079, which means the groups separate
+completely, not that the effect is large. Judge magnitude from the means, and
+significance from the p.
+
+The verdict block checks the four claims that together make the result
+coherent: replicas diverge, the detector sees it, `index_recall` does *not*
+differ (the graph is fine), and `completeness` does (the cause is missing
+data). Any one reading `[no]` is worth understanding before writing anything.
+
 ## Validating the measurement core
 
 The metric math is pure and tested without a cluster:
@@ -145,7 +174,9 @@ experiment produces is uninterpretable.
 | `test_metrics.py` | offline validation, no cluster needed |
 | `probe.py` | direct per-replica gRPC client |
 | `run_experiment.py` | orchestration; reuses `chaos_harness.py` for process management and fault injection |
-| `analyze.py` | Q1–Q4 from `samples.csv` |
+| `analyze.py` | Q0/QS/Q1–Q4 for a single run |
+| `sweep.py` | runs both conditions across several seeds |
+| `aggregate.py` | baseline vs chaos across seeds, with an exact rank test |
 
 ## Interpreting the output
 
