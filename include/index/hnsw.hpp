@@ -137,10 +137,33 @@ namespace nanodb {
                 std::priority_queue<Result> candidates =
                     search_layer(curr_obj, node_ptr->vector, config::EF_CONSTRUCTION, l);
 
-                std::vector<id_t> selected_neighbors;
-                while (!candidates.empty() && selected_neighbors.size() < (size_t)config::M) {
-                    selected_neighbors.push_back(candidates.top().id);
+                // search_layer returns a bounded MAX-heap of the ef nearest
+                // candidates, so top() is the FARTHEST of them. Draining it
+                // directly therefore selected the M *farthest* of the
+                // ef_construction candidates -- roughly ranks 185-200 out of
+                // 200 -- and wired every new node to the worst neighbours
+                // available. That is the exact inverse of what HNSW requires,
+                // and it degrades with scale: at small N the graph is dense
+                // enough (M_MAX0 = 32) to mask it, which is why the recall
+                // benchmark reported ~95% while a 21k-vector shard measured
+                // ~46%.
+                //
+                // Drain fully, then reverse to nearest-first -- the same
+                // ordering fix search() already applies before truncating to
+                // k -- and take the M nearest.
+                std::vector<Result> ordered;
+                ordered.reserve(candidates.size());
+                while (!candidates.empty()) {
+                    ordered.push_back(candidates.top());
                     candidates.pop();
+                }
+                std::reverse(ordered.begin(), ordered.end());
+
+                std::vector<id_t> selected_neighbors;
+                for (const Result& cand : ordered) {
+                    if (selected_neighbors.size() >= (size_t)config::M) break;
+                    if (cand.id == id) continue;   // never link a node to itself
+                    selected_neighbors.push_back(cand.id);
                 }
 
                 for (id_t neighbor_id : selected_neighbors) {
@@ -296,7 +319,17 @@ namespace nanodb {
             std::uniform_real_distribution<double> dist(0.0, 1.0);
             double r = dist(rng_);
             int level = 0;
-            while (r < 0.03 && level < config::M) {
+            // Node::neighbors is [MAX_LAYERS][M_MAX0], so the highest legal
+            // layer index is MAX_LAYERS - 1. The bound here used to be
+            // config::M (16), which let this return a level of up to 16 and
+            // let the connect loop write neighbors[l] for l >= 4 -- straight
+            // past the array and into neighbor_counts.
+            //
+            // P(level >= 4) = 0.03^4 = 8.1e-7, so at ~21k inserts this fires
+            // roughly 1.7% of runs and at 30M inserts about 24 times. Rare
+            // enough never to have shown up at the scales tested so far, and
+            // silent memory corruption when it does.
+            while (r < 0.03 && level < MAX_LAYERS - 1) {
                 level++;
                 r = dist(rng_);
             }
