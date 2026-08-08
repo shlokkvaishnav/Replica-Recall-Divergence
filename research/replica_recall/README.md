@@ -36,18 +36,28 @@ fourth does not, and that asymmetry is the point.
 | `index_recall` | exact top-k over **the replica's own live set** | graph / ANN quality |
 | `completeness` | intended set (no search involved) | data content |
 | `e2e_recall` | exact top-k over **the intended set** | what a client experiences |
-| `shard_agreement` | **none** — pairwise overlap between replicas | *observable in production* |
+| `shard_agreement` | **none** — pairwise overlap across a shard | shard-level health |
+| `loo_agreement` | **none** — one replica's overlap with its peers | *which replica to distrust* |
 
 Holding data content constant (`index_recall`) versus holding search constant
 (`completeness`) is what separates "the graph rotted" from "the data is
 missing". A single recall number cannot do this, which is why nobody has
 reported the distinction.
 
-`shard_agreement` is the only one you could compute on a live system. The
-experiment records all four together to answer: **does agreement track truth?**
-If yes, it is a production detector for a currently silent failure (Layer 3).
-If no, that is also a result — it means cross-replica comparison is
-insufficient and sentinel queries are required.
+The last two are the only ones computable on a live system, and `loo_agreement`
+is the one that matters. Correlating shard-level agreement against shard-level
+recall turns out to be close to tautological: when every replica misses the
+*same* hard queries, cross-replica overlap collapses onto recall whether or not
+anything is broken — it reads ~1.0 on a healthy cluster too, so it detects
+nothing.
+
+The operational question is not "is recall low" but **"which replica should I
+distrust?"** So each replica is scored by how well it agrees with its peers,
+and the experiment asks whether the lowest-scoring replica is in fact the
+lowest-recall one, measured against a chance baseline of 1/n. That is a real
+detection test. If it beats chance, it is a production signal for a currently
+silent failure (Layer 3). If it does not, that is also a result — it means
+detection requires sentinel queries with known answers, not peer comparison.
 
 ## Design decisions worth knowing
 
@@ -139,18 +149,24 @@ experiment produces is uninterpretable.
 
 ## Interpreting the output
 
-`analyze.py` answers four questions:
+`analyze.py` answers five questions:
 
+- **Q0** — does recall drift over the run on its own? Q2 compares an early
+  "before any kill" bucket against later ones, and early samples come from a
+  smaller index. If recall declines with index growth in the **baseline**,
+  Q2's gap is confounded and cannot be read as a failure effect. Always read
+  Q0 on the baseline before trusting Q2.
 - **Q1** — spread of `e2e_recall` across replicas of one shard at one instant.
   Non-trivial spread means two replicas answered the same queries differently
   at the same moment, and the client saw only one of them.
 - **Q2** — metrics bucketed by time since the nearest kill. Recovery means
   later buckets return to the pre-kill level; a permanent step down is the
-  interesting result.
+  interesting result — subject to Q0.
 - **Q3** — `index_recall` vs `completeness` on the worst samples. This is the
   decomposition, and the part no existing tool reports.
-- **Q4** — correlation between `shard_agreement` and true `e2e_recall`. The
-  Layer 3 premise.
+- **Q4** — can `loo_agreement` pick out the degraded replica, versus chance?
+  The Layer 3 test. **Compare against the baseline**: a hit rate just as high
+  with no faults is measuring noise, not detection.
 
 ## Known limits
 

@@ -172,6 +172,46 @@ def pairwise_agreement(obs_by_replica: dict[str, list[list[str]]], k: int) -> fl
     return float(np.mean(scores)) if scores else float("nan")
 
 
+def leave_one_out_agreement(obs_by_replica: dict[str, list[list[str]]],
+                            k: int) -> dict[str, float]:
+    """Per-replica mean overlap with its peers. Ground-truth-free.
+
+    This is the detection signal, and it asks a sharper question than
+    shard-level agreement does. Correlating aggregate agreement against
+    aggregate recall is close to tautological: when every replica misses the
+    same hard queries, cross-replica overlap collapses onto recall whether or
+    not anything is broken -- it reads the same on a healthy cluster.
+
+    What an operator actually needs is *which replica to distrust*. So score
+    each replica by how well it agrees with the others: a replica that has
+    silently diverged should agree with its peers less than they agree with
+    each other. analyze.py then checks whether the lowest-scoring replica is
+    in fact the lowest-recall one, against a chance baseline of 1/n.
+
+    Returns NaN per replica when there are fewer than two, or fewer than
+    three -- with only two replicas both get an identical score by
+    construction and the statistic cannot single either one out.
+    """
+    names = sorted(obs_by_replica)
+    if len(names) < 3:
+        return {n: float("nan") for n in names}
+
+    out: dict[str, float] = {}
+    for n in names:
+        scores: list[float] = []
+        for m in names:
+            if m == n:
+                continue
+            for a, b in zip(obs_by_replica[n], obs_by_replica[m]):
+                sa, sb = set(a[:k]), set(b[:k])
+                if not sa and not sb:
+                    continue
+                denom = max(len(sa), len(sb))
+                scores.append(len(sa & sb) / denom)
+        out[n] = float(np.mean(scores)) if scores else float("nan")
+    return out
+
+
 # ---------------------------------------------------------------------------
 # Per-replica sample
 # ---------------------------------------------------------------------------

@@ -18,7 +18,7 @@ sys.path.insert(0, __file__.rsplit("replica_recall", 1)[0] + "replica_recall")
 
 from metrics import (                                   # noqa: E402
     exact_topk, recall_at_k, set_completeness,
-    pairwise_agreement, score_replica,
+    pairwise_agreement, leave_one_out_agreement, score_replica,
 )
 
 
@@ -111,6 +111,50 @@ def test_pairwise_agreement():
           approx(pairwise_agreement(obs, 3), 1 / 3))
 
 
+def test_leave_one_out_agreement():
+    """The detection signal must single out the odd replica, not just report
+    that the group as a whole disagrees."""
+    print("\ntest_leave_one_out_agreement")
+
+    # r0 and r1 agree with each other; r2 is the outlier.
+    obs = {
+        "r0": [["a", "b", "c"]],
+        "r1": [["a", "b", "c"]],
+        "r2": [["x", "y", "z"]],
+    }
+    loo = leave_one_out_agreement(obs, 3)
+    check("outlier scores lowest",
+          loo["r2"] < loo["r0"] and loo["r2"] < loo["r1"],
+          f"got {loo}")
+    check("the two agreeing replicas are not distinguished",
+          approx(loo["r0"], loo["r1"]), f"got {loo}")
+    check("agreeing pair scores 0.5 (1.0 with peer, 0.0 with outlier)",
+          approx(loo["r0"], 0.5), f"got {loo['r0']}")
+    check("outlier scores 0.0 against both", approx(loo["r2"], 0.0))
+
+    # A healthy group: everyone identical, nobody singled out.
+    same = {n: [["a", "b", "c"]] for n in ("r0", "r1", "r2")}
+    loo_same = leave_one_out_agreement(same, 3)
+    check("healthy group scores all replicas equally",
+          approx(loo_same["r0"], 1.0) and approx(loo_same["r1"], 1.0)
+          and approx(loo_same["r2"], 1.0))
+
+    # Fewer than three replicas cannot single anyone out.
+    loo2 = leave_one_out_agreement({"r0": [["a"]], "r1": [["b"]]}, 3)
+    check("two replicas yield NaN (cannot attribute)",
+          all(np.isnan(v) for v in loo2.values()))
+
+    # Partial degradation should be ordered, not just flagged.
+    obs3 = {
+        "r0": [["a", "b", "c", "d"]],
+        "r1": [["a", "b", "c", "d"]],
+        "r2": [["a", "b", "x", "y"]],
+    }
+    loo3 = leave_one_out_agreement(obs3, 4)
+    check("partially degraded replica still ranks lowest",
+          loo3["r2"] < loo3["r0"], f"got {loo3}")
+
+
 def test_decomposition_separates_causes():
     """The core claim: index_recall isolates graph quality, completeness
     isolates data content, and e2e_recall reflects both."""
@@ -200,6 +244,7 @@ if __name__ == "__main__":
     test_exact_topk_matches_naive()
     test_recall_and_completeness()
     test_pairwise_agreement()
+    test_leave_one_out_agreement()
     test_decomposition_separates_causes()
     test_agreement_tracks_divergence()
 

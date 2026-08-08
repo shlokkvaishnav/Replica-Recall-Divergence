@@ -43,7 +43,9 @@ sys.path.insert(0, HERE)
 sys.path.insert(0, ROOT)
 
 import chaos_harness as ch                                        # noqa: E402
-from metrics import score_replica, pairwise_agreement             # noqa: E402
+from metrics import (                                             # noqa: E402
+    score_replica, pairwise_agreement, leave_one_out_agreement,
+)
 import probe as probe_mod                                         # noqa: E402
 
 
@@ -156,8 +158,9 @@ def sample_once(probes, writer: RetainingWriter, queries: np.ndarray,
             union |= raw[n]["local"]
         intended_s = union & intended_all
 
-        agreement = pairwise_agreement(
-            {n: raw[n]["obs"] for n in live}, k) if len(live) >= 2 else float("nan")
+        live_obs = {n: raw[n]["obs"] for n in live}
+        agreement = pairwise_agreement(live_obs, k) if len(live) >= 2 else float("nan")
+        loo = leave_one_out_agreement(live_obs, k) if len(live) >= 3 else {}
 
         for n in names:
             r = raw[n]
@@ -169,6 +172,7 @@ def sample_once(probes, writer: RetainingWriter, queries: np.ndarray,
                     "index_recall": "", "e2e_recall": "", "completeness": "",
                     "n_local": "", "n_intended": len(intended_s),
                     "shard_agreement": "" if np.isnan(agreement) else round(agreement, 6),
+                    "loo_agreement": "",
                     "n_confirmed_settled": len(intended_all),
                 })
                 continue
@@ -188,6 +192,8 @@ def sample_once(probes, writer: RetainingWriter, queries: np.ndarray,
                 "n_local": int(m["n_local"]),
                 "n_intended": int(m["n_intended"]),
                 "shard_agreement": "" if np.isnan(agreement) else round(agreement, 6),
+                "loo_agreement": ("" if np.isnan(loo.get(n, float("nan")))
+                                  else round(loo[n], 6)),
                 "n_confirmed_settled": len(intended_all),
             })
     return rows
@@ -325,7 +331,8 @@ def main() -> int:
     # ---- write results -----------------------------------------------------
     cols = ["t_rel", "shard", "replica", "name", "reachable",
             "index_recall", "e2e_recall", "completeness",
-            "n_local", "n_intended", "shard_agreement", "n_confirmed_settled"]
+            "n_local", "n_intended", "shard_agreement", "loo_agreement",
+            "n_confirmed_settled"]
     csv_path = os.path.join(RESULTS_DIR, "samples.csv")
     with open(csv_path, "w", newline="") as f:
         w = csv.DictWriter(f, fieldnames=cols)

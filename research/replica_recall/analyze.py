@@ -203,68 +203,140 @@ def q3_graph_vs_data(rows) -> None:
         print(f"    {fmt(e):>8} {fmt(i):>8} {fmt(c):>9}   {verdict}")
 
 
-def q4_agreement_vs_truth(rows) -> None:
+def q0_drift(rows) -> None:
+    """Is recall stable over the run, independent of faults?
+
+    Q2 compares 'before any kill' against later windows, but the pre-kill
+    samples are drawn from early in the run when the index is smaller. If
+    recall declines with index size on its own, that gap is confounded and
+    Q2 cannot be read as a failure effect. Run this on the BASELINE (no
+    chaos) to find out.
+    """
     print("\n" + "=" * 72)
-    print("Q4  Does ground-truth-free agreement track true recall?")
+    print("Q0  Is recall stable over the run? (confound check for Q2)")
     print("=" * 72)
 
-    by_ts: dict[tuple[str, str], dict] = {}
+    pts = []
     for r in rows:
         if r["reachable"] != "1":
             continue
-        key = (r["t_rel"], r["shard"])
-        slot = by_ts.setdefault(key, {"agree": float("nan"), "e2e": []})
-        a = _f(r, "shard_agreement")
-        if not np.isnan(a):
-            slot["agree"] = a
-        v = _f(r, "e2e_recall")
-        if not np.isnan(v):
-            slot["e2e"].append(v)
+        t, v, n = _f(r, "t_rel"), _f(r, "e2e_recall"), _f(r, "n_local")
+        if not (np.isnan(t) or np.isnan(v)):
+            pts.append((t, v, n))
 
-    xs, ys = [], []
-    for slot in by_ts.values():
-        if np.isnan(slot["agree"]) or not slot["e2e"]:
-            continue
-        xs.append(slot["agree"])
-        ys.append(float(np.mean(slot["e2e"])))
-
-    if len(xs) < 3:
-        print(f"  only {len(xs)} paired observations -- need more samples")
+    if len(pts) < 6:
+        print("  too few samples")
         return
 
-    x, y = np.asarray(xs), np.asarray(ys)
-    if x.std() < 1e-9 or y.std() < 1e-9:
-        print(f"  paired observations     : {len(xs)}")
-        print("  correlation undefined (one variable is constant)")
-        print(f"  mean agreement          : {fmt(float(x.mean()))}")
-        print(f"  mean e2e_recall         : {fmt(float(y.mean()))}")
-        print()
-        print("  A constant series usually means the run was too quiet.")
-        print("  Increase --duration, or lower --sample-interval.")
-        return
+    pts.sort(key=lambda p: p[0])
+    third = max(1, len(pts) // 3)
+    first, last = pts[:third], pts[-third:]
 
-    r_pearson = float(np.corrcoef(x, y)[0, 1])
-    xr = np.argsort(np.argsort(x))
-    yr = np.argsort(np.argsort(y))
-    r_spearman = float(np.corrcoef(xr, yr)[0, 1])
+    t = np.asarray([p[0] for p in pts])
+    v = np.asarray([p[1] for p in pts])
+    slope = float(np.polyfit(t, v, 1)[0]) if t.std() > 1e-9 else float("nan")
 
-    print(f"  paired observations     : {len(xs)}")
-    print(f"  mean agreement          : {fmt(float(x.mean()))}")
-    print(f"  mean e2e_recall         : {fmt(float(y.mean()))}")
-    print(f"  Pearson  r              : {fmt(r_pearson)}")
-    print(f"  Spearman r              : {fmt(r_spearman)}")
+    f_mean = float(np.mean([p[1] for p in first]))
+    l_mean = float(np.mean([p[1] for p in last]))
+    f_n = float(np.mean([p[2] for p in first if not np.isnan(p[2])] or [float("nan")]))
+    l_n = float(np.mean([p[2] for p in last if not np.isnan(p[2])] or [float("nan")]))
+
+    print(f"  first third : e2e_recall {fmt(f_mean)}   mean n_local {f_n:,.0f}")
+    print(f"  last  third : e2e_recall {fmt(l_mean)}   mean n_local {l_n:,.0f}")
+    print(f"  drift       : {fmt(l_mean - f_mean, 4)} over the run "
+          f"({fmt(slope * 100, 5)} per 100s)")
     print()
-    if abs(r_spearman) >= 0.7:
-        print("  STRONG: cross-replica agreement predicts true recall well.")
-        print("  That is a production-viable detector for a currently silent")
-        print("  failure -- the Layer 3 result.")
-    elif abs(r_spearman) >= 0.4:
-        print("  MODERATE: some signal. Worth checking whether it sharpens")
-        print("  with more queries per sample or a longer run.")
+    if abs(l_mean - f_mean) < 0.02:
+        print("  Recall is stable with index growth. Q2's before/after gap can")
+        print("  be attributed to failure.")
     else:
-        print("  WEAK: agreement does not track truth here. Also a result --")
-        print("  it would mean replica divergence is NOT detectable by")
-        print("  cross-replica comparison alone, and needs sentinel queries.")
+        print("  WARNING: recall drifts with index size on its own. Q2's")
+        print("  'before any kill' bucket is early-run and therefore smaller-")
+        print("  index; its gap to later windows is CONFOUNDED. Compare Q2")
+        print("  against this drift before claiming a failure effect.")
+
+
+def q4_can_we_spot_the_bad_replica(rows) -> None:
+    """The detection question, asked properly.
+
+    The previous version correlated shard-level agreement against shard-level
+    recall. That reads ~1.0 on a healthy cluster too, because when replicas
+    miss the same hard queries their mutual overlap collapses onto recall
+    whether or not anything is wrong -- it measured graph quality twice, not
+    detection.
+
+    The operational question is: using ONLY cross-replica comparison, can you
+    identify which replica to distrust? Scored against chance.
+    """
+    print("\n" + "=" * 72)
+    print("Q4  Can cross-replica comparison identify the degraded replica?")
+    print("=" * 72)
+
+    groups: dict[tuple[str, str], list[tuple[str, float, float]]] = {}
+    for r in rows:
+        if r["reachable"] != "1":
+            continue
+        loo, e2e = _f(r, "loo_agreement"), _f(r, "e2e_recall")
+        if np.isnan(loo) or np.isnan(e2e):
+            continue
+        groups.setdefault((r["t_rel"], r["shard"]), []).append(
+            (r["name"], loo, e2e))
+
+    usable = [g for g in groups.values() if len(g) >= 3]
+    if len(usable) < 5:
+        print(f"  only {len(usable)} groups with >=3 scored replicas.")
+        print("  (loo_agreement needs 3+ reachable replicas in a shard; with")
+        print("   2 it is identical for both by construction.)")
+        print("  If this run predates the loo_agreement column, re-run.")
+        return
+
+    hits = 0
+    spearmans = []
+    margins = []
+    for g in usable:
+        loo_min = min(g, key=lambda x: x[1])[0]
+        e2e_min = min(g, key=lambda x: x[2])[0]
+        if loo_min == e2e_min:
+            hits += 1
+
+        loo_v = np.asarray([x[1] for x in g])
+        e2e_v = np.asarray([x[2] for x in g])
+        if loo_v.std() > 1e-9 and e2e_v.std() > 1e-9:
+            lr = np.argsort(np.argsort(loo_v))
+            er = np.argsort(np.argsort(e2e_v))
+            spearmans.append(float(np.corrcoef(lr, er)[0, 1]))
+
+        srt = sorted(x[2] for x in g)
+        margins.append(srt[1] - srt[0])          # gap between worst and next
+
+    n_rep = float(np.mean([len(g) for g in usable]))
+    chance = 1.0 / n_rep
+    rate = hits / len(usable)
+
+    print(f"  groups scored           : {len(usable)}")
+    print(f"  mean replicas per group : {n_rep:.1f}")
+    print(f"  worst-replica hit rate  : {fmt(rate)}   (chance {fmt(chance)})")
+    print(f"  lift over chance        : {fmt(rate / chance, 2)}x")
+    if spearmans:
+        print(f"  within-group rank corr  : {fmt(float(np.mean(spearmans)))}")
+    print(f"  mean true recall margin : {fmt(float(np.mean(margins)))}"
+          "   (worst vs next-worst)")
+    print()
+
+    if rate >= chance * 1.8 and rate >= 0.55:
+        print("  DETECTS: agreement identifies the degraded replica well above")
+        print("  chance. That is a usable production signal -- the Layer 3")
+        print("  result, and it is not available from any existing tool.")
+    elif rate >= chance * 1.3:
+        print("  PARTIAL: better than chance but not reliable alone. Check")
+        print("  whether it sharpens with more queries per sample.")
+    else:
+        print("  DOES NOT DETECT: cross-replica agreement cannot single out")
+        print("  the bad replica. A real result -- it means detection needs")
+        print("  sentinel queries with known answers, not peer comparison.")
+    print()
+    print("  Compare this against the BASELINE run. A hit rate that is just")
+    print("  as high with no faults is measuring noise, not detection.")
 
 
 def main() -> int:
@@ -291,10 +363,11 @@ def main() -> int:
     print(f"  unreachable samples: {unreachable}/{len(rows)} "
           f"({100.0 * unreachable / max(len(rows), 1):.1f}%)")
 
+    q0_drift(rows)
     q1_intra_shard_spread(rows)
     q2_recall_around_failover(rows, events)
     q3_graph_vs_data(rows)
-    q4_agreement_vs_truth(rows)
+    q4_can_we_spot_the_bad_replica(rows)
     print()
     return 0
 
