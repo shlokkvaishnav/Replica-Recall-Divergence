@@ -307,7 +307,21 @@ namespace nanodb {
         // Tombstoned nodes are skipped during neighbor expansion.
         std::priority_queue<Result> search_layer(id_t entry_point, const float* query_vec,
                                                   int ef, int layer) {
-            std::vector<bool> visited(std::max((size_t)entry_point, element_count_) + 2000, false);
+            // visited must be indexable by any node id reachable in the graph.
+            // Sizing it from element_count_ was wrong in both directions:
+            // element_count_ is the *live* count, and delete_vector()
+            // decrements it, so after deletions the bitmap was smaller than
+            // the id space still present in the graph. The bounds check in
+            // the expansion loop below then silently skipped valid neighbors,
+            // bleeding recall in proportion to the number of deletes -- i.e.
+            // exactly the workload this index is being measured on.
+            //
+            // Storage capacity is the correct bound: insert() grows the file
+            // so that HEADER_SIZE + id*sizeof(Node) + sizeof(Node) always
+            // fits, so every addressable node id is < capacity by
+            // construction, and it survives restarts without extra state.
+            size_t capacity = (storage_.get_size() - HEADER_SIZE) / sizeof(Node);
+            std::vector<bool> visited(capacity, false);
             std::priority_queue<Result, std::vector<Result>, std::greater<Result>> candidates;
             std::priority_queue<Result> found_results;
 
