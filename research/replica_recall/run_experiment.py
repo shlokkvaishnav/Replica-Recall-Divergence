@@ -324,6 +324,14 @@ def main() -> int:
     chaos_start_rel = None
     chaos_stop_rel = None
 
+    # Declared out here, not inside the quiesce branch, so the interrupt
+    # handler below can always stop the chaos thread. The quiesce path runs
+    # chaos off its own event rather than stop_evt; if a Ctrl-C during the
+    # fault window left that event unset, chaos_loop would keep killing and
+    # restarting nodes straight through teardown and could leave orphans
+    # holding the ports -- which then breaks the next run of a sweep.
+    chaos_stop_evt = threading.Event()
+
     try:
         if args.no_chaos:
             print(f"[rr] baseline (no chaos), running {args.duration}s...")
@@ -363,7 +371,6 @@ def main() -> int:
             print(f"[rr] phase 1/3: {pre:.0f}s settling, no faults...")
             time.sleep(pre)
 
-            chaos_stop_evt = threading.Event()
             ct = threading.Thread(target=ch.chaos_loop,
                                   args=(chaos_stop_evt, procs, chaos_events),
                                   daemon=True)
@@ -395,6 +402,7 @@ def main() -> int:
     except KeyboardInterrupt:
         print("\n[rr] interrupted, shutting down early")
 
+    chaos_stop_evt.set()
     stop_evt.set()
     for t in threads:
         t.join(timeout=10.0)
