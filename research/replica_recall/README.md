@@ -142,15 +142,67 @@ Timeline: `--pre-chaos-s` (default 30) settling → `--chaos-duration` of faults
 → the remainder as recovery. Everything killed is restarted at the moment
 chaos stops, so a still-down node cannot masquerade as a failure to heal.
 
-`completeness` is the metric to watch, not recall: unlike recall it does not
-drift with index size, and a healthy cluster holds it at exactly 1.0000, so
-the target is unambiguous.
+Recall is the wrong metric here — it drifts with index size, and the index
+grows throughout. `completeness` doesn't, and a healthy cluster holds it at
+exactly 1.0000.
 
-- Returns to 1.0 → the system self-heals; divergence is transient and the
-  thesis weakens considerably.
-- Stays short → **a replica that missed writes while down never gets them
-  back.** No anti-entropy, no read-repair, no catch-up. Every query routed
-  there silently returns worse results, indefinitely.
+### The dilution trap
+
+**But do not judge healing on `completeness` either.** It is a ratio, writes
+keep flowing through the quiesce window, and a growing denominator drags it
+toward 1.0 even when nothing has been recovered. From the first real run:
+
+| phase | completeness | missing ids | n_intended |
+|---|---|---|---|
+| before chaos | 1.0000 | 0 | 2,791 |
+| during chaos | 0.9753 | 254 | 9,143 |
+| 0–30s after stop | 0.9607 | **590** | 15,009 |
+| 30–60s after stop | 0.9649 | **592** | 16,881 |
+| >60s after stop | 0.9694 | **592** | 19,620 |
+
+The ratio climbs 0.9607 → 0.9694 and looks like gradual recovery. The absolute
+count is flat. **Not one missed write came back** — the entire apparent
+recovery is `n_intended` growing from 15,009 to 19,620.
+
+So the verdict is computed on `missing = (1 - completeness) × n_intended`,
+with damage measured at the moment faults stop (averaging over the chaos
+window understates it, since early chaos has done less), and *healed*
+requiring ≥90% of missed writes to actually return.
+
+`n_intended - n_local` will **not** substitute: `n_local` includes writes too
+recent to have settled, so that difference is negative on a healthy replica
+(−250 in the run above).
+
+- Missing count returns to ~0 → the system self-heals; divergence is
+  transient and the thesis weakens considerably.
+- Missing count stays flat → **a replica that missed writes while down never
+  gets them back.** No anti-entropy, no read-repair, no catch-up. Every query
+  routed there silently returns worse results, indefinitely.
+
+### Read the result honestly
+
+Nano-DB has **no anti-entropy mechanism, by design**. That is documented in
+`cluster/coordinator_main.cpp` (see the note on `element_count` being "a
+scalar proxy, not a true diff", with real reconciliation called out as a
+separate effort). So a "does not heal" result here is **not the discovery of
+a surprising bug** — it is a measurement of a known, deliberate scope
+decision.
+
+What is genuinely not known in advance, and what this measures:
+
+1. **The magnitude and permanence** under a realistic failure rate — how many
+   writes go permanently missing, and whether the gap closes at all.
+2. **That it is completely invisible** — no error, no failed write, no
+   consistency violation, and a client that lands on the degraded replica
+   sees only slightly worse results forever.
+3. **Whether it generalizes.** This is the important one and it is open.
+   Qdrant, Milvus and Weaviate all ship replication; whether any of them
+   performs anti-entropy after a replica outage is not something anyone has
+   published. Pointing this harness at them is the step that would turn a
+   measurement of one toy system into a contribution.
+
+Claiming more than that from a single-system result would not survive review,
+and shouldn't.
 
 ## The seed sweep (what you actually report)
 
