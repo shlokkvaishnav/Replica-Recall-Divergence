@@ -112,39 +112,42 @@ def report_healing(runs) -> None:
     print("\n" + "=" * 78)
     print("Healing -- quiesce runs (faults stopped mid-run)")
     print("=" * 78)
-    print(f"  {'seed':>10} {'pre':>9} {'during':>9} {'after':>9} "
-          f"{'deficit':>9} {'healed':>8}")
-    print("  " + "-" * 60)
+    print("  Missing ids = (1 - completeness) * n_intended. The ratio alone")
+    print("  climbs through denominator growth as writes continue, so the")
+    print("  absolute count decides whether anything was actually recovered.")
+    print()
+    print(f"  {'seed':>10} {'miss@stop':>11} {'miss@end':>10} "
+          f"{'recovered':>11} {'healed':>8}")
+    print("  " + "-" * 56)
 
-    pre_all, post_all, deficits, healed_flags = [], [], [], []
+    at_stop_all, end_all, rec_all, healed_flags = [], [], [], []
     for seed, h in quiesce:
         last = next((h[k] for k in ("post60p", "post30_60", "post0_30")
                      if h[k]["n"] > 0), None)
-        if last is None:
+        if last is None or h.get("healed") is None:
             continue
-        pre_c = h["pre"]["completeness"]
-        dur_c = h["during"]["completeness"]
-        pre_all.append(pre_c)
-        post_all.append(last["completeness"])
-        deficits.append(h["deficit"])
+        at_stop = h["post0_30"] if h["post0_30"]["n"] > 0 else last
+        at_stop_all.append(at_stop["missing"])
+        end_all.append(last["missing"])
+        rec_all.append(h["recovered_frac"])
         healed_flags.append(bool(h["healed"]))
-        print(f"  {seed:>10} {fmt(pre_c):>9} {fmt(dur_c):>9} "
-              f"{fmt(last['completeness']):>9} {fmt(h['deficit']):>9} "
+        print(f"  {seed:>10} {at_stop['missing']:>11.0f} "
+              f"{last['missing']:>10.0f} {h['recovered_frac']:>10.0%} "
               f"{('yes' if h['healed'] else 'NO'):>8}")
 
-    if not deficits:
+    if not healed_flags:
+        print("  (no quiesce run had measurable damage to recover from)")
         return
     print()
-    print(f"  mean pre-chaos completeness  : {fmt(float(np.mean(pre_all)))}")
-    print(f"  mean post-chaos completeness : {fmt(float(np.mean(post_all)))}")
-    print(f"  residual deficit             : {fmt(float(np.mean(deficits)))} "
-          f"(range {fmt(min(deficits))} to {fmt(max(deficits))})")
+    print(f"  mean missing when faults stopped : {float(np.mean(at_stop_all)):>7.0f}")
+    print(f"  mean missing at run end          : {float(np.mean(end_all)):>7.0f}")
+    print(f"  mean recovered                   : {float(np.mean(rec_all)):>7.1%}"
+          f"  (range {min(rec_all):.0%} to {max(rec_all):.0%})")
     print()
-    # No p-value here on purpose. Pre and post are paired within a run, and
-    # pre is 1.0000 in every healthy run -- an unpaired rank test on a
-    # constant would report the floor regardless of the effect and would be
-    # meaningless. The deficit and its range are the honest summary; the
-    # per-run healed/NO column is the finding.
+    # No p-value on pre vs post: they are paired within a run and pre is 0
+    # missing in every healthy run, so an unpaired rank test against a
+    # constant would report its floor regardless of the effect. The recovered
+    # fraction and the per-run healed/NO column are the honest summary.
     n_healed = sum(healed_flags)
     n_runs = len(healed_flags)
     if n_healed == n_runs:

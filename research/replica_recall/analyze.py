@@ -390,9 +390,23 @@ def heal_stats(rows, meta) -> dict | None:
         if r["reachable"] != "1":
             continue
         t = _f(r, "t_rel")
-        c, e = _f(r, "completeness"), _f(r, "e2e_recall")
+        c, e, ni = (_f(r, "completeness"), _f(r, "e2e_recall"),
+                    _f(r, "n_intended"))
         if np.isnan(t) or np.isnan(c):
             continue
+        # The ABSOLUTE number of intended ids this replica is missing.
+        #
+        # completeness alone cannot answer the healing question: it is a
+        # ratio, writes keep flowing during the quiesce window, and a growing
+        # denominator drags it toward 1.0 even when not one missed write has
+        # been recovered. Measured here, completeness climbed 0.9607 -> 0.9694
+        # after faults stopped while the missing count went 590 -> 600. That
+        # reads as partial recovery and is pure dilution.
+        #
+        # n_intended - n_local will NOT do instead: n_local includes writes
+        # too recent to have settled, so that difference is negative on a
+        # healthy replica.
+        missing = (1.0 - c) * ni if not np.isnan(ni) else float("nan")
         if t < t0:
             k = "pre"
         elif t < t1:
@@ -401,25 +415,42 @@ def heal_stats(rows, meta) -> dict | None:
             dt = t - t1
             k = ("post0_30" if dt < 30 else
                  "post30_60" if dt < 60 else "post60p")
-        phases[k].append((c, e))
+        phases[k].append((c, e, missing))
 
     out = {}
     for k, vals in phases.items():
         out[k] = {
             "completeness": nanmean([v[0] for v in vals]),
             "e2e_recall": nanmean([v[1] for v in vals]),
+            "missing": nanmean([v[2] for v in vals]),
             "n": len(vals),
         }
 
-    pre_c = out["pre"]["completeness"]
+    pre_m = out["pre"]["missing"]
     last = next((out[k] for k in ("post60p", "post30_60", "post0_30")
                  if out[k]["n"] > 0), None)
-    out["healed"] = (
-        None if (last is None or np.isnan(pre_c))
-        else bool(last["completeness"] >= pre_c - 0.005))
-    out["deficit"] = (
-        float("nan") if (last is None or np.isnan(pre_c))
-        else pre_c - last["completeness"])
+    # Damage is measured at the moment faults stop, not averaged over the
+    # chaos window (which understates it -- early chaos has done less).
+    at_stop = out["post0_30"] if out["post0_30"]["n"] > 0 else last
+
+    if last is None or at_stop is None or np.isnan(pre_m):
+        out["healed"] = None
+        out["recovered_frac"] = float("nan")
+        out["residual_missing"] = float("nan")
+    else:
+        damage = at_stop["missing"] - pre_m
+        residual = last["missing"] - pre_m
+        out["residual_missing"] = residual
+        out["recovered_frac"] = (
+            1.0 - residual / damage if damage > 1e-9 else float("nan"))
+        # Healed means the writes actually came back, so judge on the count.
+        out["healed"] = (None if damage <= 1e-9
+                         else bool(out["recovered_frac"] >= 0.9))
+
+    # Kept for continuity of the older ratio-based reporting.
+    pre_c = out["pre"]["completeness"]
+    out["deficit"] = (float("nan") if (last is None or np.isnan(pre_c))
+                      else pre_c - last["completeness"])
     return out
 
 
@@ -444,8 +475,9 @@ def qheal_recovery(rows, meta) -> None:
     print(f"  chaos window: {meta['chaos_start_rel']:.0f}s -> "
           f"{meta['chaos_stop_rel']:.0f}s")
     print()
-    print(f"  {'phase':<22} {'n':>4} {'completeness':>13} {'e2e_recall':>12}")
-    print("  " + "-" * 54)
+    print(f"  {'phase':<22} {'n':>4} {'completeness':>13} {'missing ids':>12} "
+          f"{'e2e_recall':>11}")
+    print("  " + "-" * 66)
     labels = [("pre", "before chaos"), ("during", "during chaos"),
               ("post0_30", "0-30s after stop"),
               ("post30_60", "30-60s after stop"),
@@ -454,24 +486,31 @@ def qheal_recovery(rows, meta) -> None:
         p = h[key]
         if p["n"] == 0:
             continue
+        miss = ("  n/a" if np.isnan(p["missing"]) else f"{p['missing']:.0f}")
         print(f"  {label:<22} {p['n']:>4} {fmt(p['completeness']):>13} "
-              f"{fmt(p['e2e_recall']):>12}")
+              f"{miss:>12} {fmt(p['e2e_recall']):>11}")
 
     print()
+    print("  Judge on 'missing ids', not completeness. Writes keep flowing")
+    print("  during the quiesce window, so a growing denominator drags the")
+    print("  ratio toward 1.0 even if nothing is ever recovered.")
+    print()
     if h["healed"] is None:
-        print("  Not enough samples in one of the phases to judge.")
+        print("  Not enough damage or too few samples in a phase to judge.")
     elif h["healed"]:
-        print("  HEALS: completeness returns to its pre-chaos level once")
-        print("  faults stop. The divergence is transient, and the thesis")
-        print("  weakens considerably -- a transient gap is far less")
-        print("  interesting than a permanent one.")
+        print(f"  HEALS: {h['recovered_frac']:.0%} of the writes missed during")
+        print("  the outage were recovered once faults stopped. The divergence")
+        print("  is transient, and the thesis weakens considerably -- a")
+        print("  transient gap is far less interesting than a permanent one.")
     else:
-        print(f"  DOES NOT HEAL: completeness is still {fmt(h['deficit'])} "
-              f"short of")
-        print("  its pre-chaos level well after the last fault. A replica")
-        print("  that missed writes while it was down never gets them back:")
-        print("  no anti-entropy, no read-repair, no catch-up. Every query")
-        print("  routed there returns silently worse results, indefinitely.")
+        print(f"  DOES NOT HEAL: {h['recovered_frac']:.0%} of missed writes "
+              f"recovered;")
+        print(f"  {h['residual_missing']:.0f} ids still absent well after the "
+              f"last fault.")
+        print("  A replica that missed writes while it was down never gets")
+        print("  them back: no anti-entropy, no read-repair, no catch-up.")
+        print("  Every query routed there returns silently worse results,")
+        print("  indefinitely.")
         print()
         print("  This is the headline result if it holds across seeds.")
 
