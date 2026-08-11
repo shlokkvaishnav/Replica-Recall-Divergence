@@ -64,22 +64,67 @@ class RetainingWriter:
     settling window -- see intended_set().
     """
 
-    def __init__(self, dim: int, seed: int):
+    def __init__(self, dim: int, seed: int, dist: str = "uniform",
+                 intrinsic_dim: int = 12, noise: float = 0.02):
         self.dim = dim
         self.lock = threading.Lock()
         self.vector_of: dict[str, np.ndarray] = {}
         self.confirmed_at: dict[str, float] = {}
         self.attempted = 0
         self.failed = 0
-        self._rng = np.random.default_rng(seed)
         self._next = 0
+        self._seed = seed
+        self._dist = dist
+        self._intrinsic = intrinsic_dim
+        self._noise = noise
+
+        # Per-thread generators. numpy Generators are NOT thread-safe, and
+        # this ran unlocked across --writers threads -- the vectors were still
+        # arbitrary points so the measurements survive, but the stream was
+        # undefined and the run was not reproducible from its seed, which it
+        # is supposed to be. Seeded from (seed, thread index) so a fixed
+        # writer count gives a deterministic corpus.
+        self._tls = threading.local()
+        self._thread_counter = 0
+
+        if dist == "lowdim":
+            # Sample in a low-dimensional subspace and project up. Uniform
+            # random points in 128-d suffer distance concentration -- nearest
+            # and farthest distances converge, so the true top-k is close to
+            # arbitrary and recall falls with N for reasons that have nothing
+            # to do with the index. Real embeddings sit at low intrinsic
+            # dimensionality; measured on this generator the index holds
+            # recall@10 = 1.000 to 20k where uniform gives 0.726.
+            proj_rng = np.random.default_rng([seed, 0xC0FFEE])
+            self._proj = proj_rng.standard_normal(
+                (intrinsic_dim, dim)).astype(np.float32)
+        elif dist == "uniform":
+            self._proj = None
+        else:
+            raise ValueError(f"unknown --dist: {dist!r}")
+
+    def _rng(self):
+        r = getattr(self._tls, "rng", None)
+        if r is None:
+            with self.lock:
+                idx = self._thread_counter
+                self._thread_counter += 1
+            r = np.random.default_rng([self._seed, idx])
+            self._tls.rng = r
+        return r
 
     def _make(self) -> tuple[str, np.ndarray]:
         with self.lock:
             vid = f"rr-{self._next}"
             self._next += 1
-        vec = self._rng.random(self.dim, dtype=np.float32) * 2.0 - 1.0
-        return vid, vec
+        rng = self._rng()
+        if self._proj is None:
+            vec = rng.random(self.dim, dtype=np.float32) * 2.0 - 1.0
+        else:
+            z = rng.standard_normal(self._intrinsic).astype(np.float32)
+            vec = (z @ self._proj) / np.float32(self._intrinsic)
+            vec += rng.standard_normal(self.dim).astype(np.float32) * np.float32(self._noise)
+        return vid, vec.astype(np.float32)
 
     def loop(self, stop_evt: threading.Event, node_ids: list[int]) -> None:
         while not stop_evt.is_set():
@@ -103,6 +148,24 @@ class RetainingWriter:
                 with self.lock:
                     self.failed += 1
             time.sleep(0.01)
+
+    def make_queries(self, n: int) -> np.ndarray:
+        """Query set drawn from the SAME distribution as the corpus.
+
+        Non-negotiable for lowdim: the corpus lives on a 12-dimensional
+        manifold inside 128-space, so a uniform query would sit far off it and
+        its nearest neighbours would be essentially arbitrary -- measuring
+        nothing about the index. Uses its own generator seeded off the run
+        seed, so the query set is fixed across samples and reproducible across
+        runs without consuming from any writer's stream.
+        """
+        qrng = np.random.default_rng([self._seed, 0xDEC0DE])
+        if self._proj is None:
+            return qrng.random((n, self.dim), dtype=np.float32) * 2.0 - 1.0
+        z = qrng.standard_normal((n, self._intrinsic)).astype(np.float32)
+        q = (z @ self._proj) / np.float32(self._intrinsic)
+        q += qrng.standard_normal((n, self.dim)).astype(np.float32) * np.float32(self._noise)
+        return q.astype(np.float32)
 
     def intended_set(self, settle_s: float) -> set[str]:
         """Ids confirmed at least `settle_s` ago.
@@ -225,6 +288,12 @@ def main() -> int:
     ap.add_argument("--warmup-s", type=float, default=20.0,
                     help="write without chaos before fault injection starts")
     ap.add_argument("--metric", default="l2", choices=("l2", "ip"))
+    ap.add_argument("--dist", default="uniform", choices=("uniform", "lowdim"),
+                    help="vector distribution. 'uniform' is random 128-d, "
+                         "which suffers distance concentration and depresses "
+                         "recall for reasons unrelated to the index. 'lowdim' "
+                         "samples in a 12-d subspace and projects up, the "
+                         "regime real embeddings occupy.")
     ap.add_argument("--seed", type=int, default=20260808)
     ap.add_argument("--no-chaos", action="store_true",
                     help="baseline run: measure divergence with no faults")
@@ -259,8 +328,12 @@ def main() -> int:
 
     # Pinned query set -- identical at every sample and across runs, so
     # recall differences are attributable to the cluster, not the queries.
-    qrng = np.random.default_rng(args.seed)
-    queries = (qrng.random((args.queries, ch.VECTOR_DIM), dtype=np.float32) * 2.0 - 1.0)
+    # The writer owns the distribution, so it also mints the query set: a
+    # uniform query against a lowdim corpus would sit off the data manifold
+    # and measure nothing. Constructed here rather than after cluster startup
+    # purely so the queries can come from it; it touches no cluster state.
+    writer = RetainingWriter(ch.VECTOR_DIM, args.seed, dist=args.dist)
+    queries = writer.make_queries(args.queries)
 
     shutil.rmtree(ch.RUN_DIR, ignore_errors=True)
     ch.write_initial_configs()
@@ -296,7 +369,6 @@ def main() -> int:
     probes = probe_mod.build_probes(ch.NUM_SHARDS, ch.REPLICAS_PER_SHARD,
                                      ch.shard_port)
 
-    writer = RetainingWriter(ch.VECTOR_DIM, args.seed)
     stop_evt = threading.Event()
     rows: list[dict] = []
     sampler_errors: list[str] = []
@@ -437,6 +509,7 @@ def main() -> int:
         "settle_s": args.settle_s,
         "warmup_s": args.warmup_s,
         "metric": args.metric,
+        "dist": args.dist,
         "seed": args.seed,
         "chaos": not args.no_chaos,
         # Present only for quiesce runs; analyze.py keys the healing report

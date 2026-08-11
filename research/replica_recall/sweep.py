@@ -96,8 +96,17 @@ def main() -> int:
                          "(default 120; the rest of --duration is recovery)")
     ap.add_argument("--force", action="store_true",
                     help="re-run even if results already exist")
+    ap.add_argument("--out-dir", default=None,
+                    help="where to write runs (default results_sweep/). Use a "
+                         "separate directory per corpus distribution -- run "
+                         "names carry only seed and condition, so a lowdim "
+                         "sweep would otherwise overwrite a uniform one.")
     args, extra = ap.parse_known_args()
 
+    global SWEEP_DIR
+    if args.out_dir:
+        SWEEP_DIR = (args.out_dir if os.path.isabs(args.out_dir)
+                     else os.path.join(HERE, args.out_dir))
     os.makedirs(SWEEP_DIR, exist_ok=True)
     seeds = [args.seed_base + i for i in range(args.seeds)]
     if args.only:
