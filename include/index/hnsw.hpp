@@ -198,7 +198,18 @@ namespace nanodb {
         // Search for the k nearest neighbors of a query vector.
         // Deleted (tombstoned) nodes are silently skipped.
         // -----------------------------------------------------------------------
-        std::vector<Result> search(const std::vector<float>& query, int k) {
+        // ef controls the search beam width: higher costs latency and buys
+        // recall. Passing 0 (the default) keeps the historical behaviour of
+        // max(100, k).
+        //
+        // This was hardcoded, which made the recall/latency tradeoff
+        // unreachable from outside. Measured on 20k uniform random 128-d
+        // vectors, recall@10 goes 0.726 at ef=100, 0.876 at ef=200, and
+        // 0.949 at ef=400 -- the knob works, it just wasn't exposed. Standard
+        // ANN benchmarks sweep it, and the Big-ANN streaming harness requires
+        // it as a query argument.
+        std::vector<Result> search(const std::vector<float>& query, int k,
+                                    int ef = 0) {
             if (entry_point_id_ == NO_ENTRY) return {};
 
             id_t curr_obj = entry_point_id_;
@@ -219,7 +230,7 @@ namespace nanodb {
                 }
             }
 
-            int ef_search = std::max(100, k);
+            int ef_search = (ef > 0) ? std::max(ef, k) : std::max(100, k);
             std::priority_queue<Result> top_candidates =
                 search_layer(curr_obj, query.data(), ef_search, 0);
 

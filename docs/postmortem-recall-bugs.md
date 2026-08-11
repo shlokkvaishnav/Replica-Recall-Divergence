@@ -243,16 +243,47 @@ The measurement harness, the metric definitions, and the reasoning behind them
 are in `research/replica_recall/`. The fixes are in `include/index/hnsw.hpp`,
 in three commits, each with the measurement that justified it.
 
-## Still open
+## The decay that wasn't a bug
 
-Recall still decays with index size — 0.98 at 2k down to 0.59 at 40k. That is
-better than a collapse, but a correct HNSW should be flatter than that. Two
-candidates: `MAX_LAYERS` is capped at 4 with a 0.03 level probability, so at
-40k the hierarchy above layer 1 holds roughly 36 nodes; and `ef_search` is
-hardcoded to 100. There is also a real possibility that part of the remaining
-decay is not a bug at all — uniform random high-dimensional vectors suffer
-distance concentration, and recall genuinely falls with `N` on such data in a
-way it would not on real embeddings with lower intrinsic dimensionality.
+After those fixes recall still fell with index size — 0.98 at 2k down to 0.73
+at 20k — and a correct HNSW should be flatter. I had two suspects: the
+hierarchy (`MAX_LAYERS` capped at 4 with a 0.03 level probability, leaving
+only a few dozen nodes above layer 1) and the hardcoded `ef_search = 100`.
+There was a third possibility I thought less likely: that it was not a defect
+at all, but distance concentration in uniform random data.
 
-I do not yet know which of those it is, and I would rather say that than
-publish a number I have not earned.
+I tested all three rather than guessing, each as a patched build measured
+against exact brute force. Recall@10 at 20,000 vectors:
+
+| variant | recall@10 |
+|---|---|
+| baseline (uniform data, `MAX_LAYERS=4`, p=0.03, ef=100) | 0.726 |
+| `MAX_LAYERS=8` | 0.731 |
+| level probability 0.0625 (the standard 1/ln(M)) | 0.733 |
+| both | 0.726 |
+| ef_search 200 | 0.876 |
+| ef_search 400 | 0.949 |
+| **same index, low-intrinsic-dimension data** | **1.000** |
+
+Two things fell out.
+
+**The hierarchy hypothesis was wrong.** Every variant landed within noise of
+the baseline. Had I "fixed" it on intuition I would have changed the node
+layout, invalidated every existing index file, and improved nothing.
+
+**The decay was the data, not the index.** On data with low intrinsic
+dimensionality — the regime real embeddings occupy — recall is **1.000 at
+every size tested**, with no code change at all. Uniform random 128-dimensional
+points suffer distance concentration: the ratio of nearest to farthest
+neighbour tends toward 1, so the "true top 10" is a near-arbitrary pick from a
+crowd of near-equidistant candidates, and it gets worse as `N` grows. Recall
+falling with `N` on that data is expected behaviour, not a defect.
+
+The one real gap the exercise did surface is that `ef_search` was hardcoded,
+which put the recall/latency tradeoff out of reach from outside. It is a
+parameter now. That is not a bug fix — it is the knob that was missing.
+
+The general lesson is the one I keep relearning: **a benchmark on synthetic
+data measures your benchmark as much as your system.** I nearly spent a day
+fixing a hierarchy that was never broken, on evidence that was an artifact of
+how I generated vectors.
