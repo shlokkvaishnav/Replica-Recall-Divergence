@@ -196,10 +196,17 @@ def sample_once(probes, writer: RetainingWriter, queries: np.ndarray,
     vector_of = writer.snapshot_vectors()
 
     # Phase 1: collect raw observations from every replica.
+    # Over-fetch. score_replica must drop results that fall outside the
+    # settled intended set before truncating to k; without spare results to
+    # draw on, that filtering would just shorten the list and under-report
+    # e2e_recall. 3k leaves ample headroom at realistic write rates.
+    k_fetch = k * 3
+
     raw: dict[str, dict] = {}
     for p in probes:
         ok_ids, local = p.list_local_ids()
-        ok_search, obs = (p.search_batch(queries, k) if ok_ids else (False, []))
+        ok_search, obs = (p.search_batch(queries, k_fetch) if ok_ids
+                          else (False, []))
         raw[p.name] = {
             "probe": p,
             "reachable": bool(ok_ids and ok_search),
@@ -221,7 +228,9 @@ def sample_once(probes, writer: RetainingWriter, queries: np.ndarray,
             union |= raw[n]["local"]
         intended_s = union & intended_all
 
-        live_obs = {n: raw[n]["obs"] for n in live}
+        # Truncated to k: agreement should compare the answer a client would
+        # receive, not the over-fetch tail requested for scoring.
+        live_obs = {n: [o[:k] for o in raw[n]["obs"]] for n in live}
         agreement = pairwise_agreement(live_obs, k) if len(live) >= 2 else float("nan")
         loo = leave_one_out_agreement(live_obs, k) if len(live) >= 3 else {}
 

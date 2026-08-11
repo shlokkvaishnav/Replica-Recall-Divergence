@@ -236,18 +236,37 @@ def score_replica(queries: np.ndarray,
     local_known = [i for i in sorted(local_ids) if i in vector_of]
     intended_known = [i for i in sorted(intended_ids) if i in vector_of]
 
-    def _mean_recall(truth_ids: list[str]) -> float:
+    def _mean_recall(truth_ids: list[str], restrict: set[str] | None) -> float:
+        """`restrict` limits the replica's answer to ids the truth set could
+        contain, before truncating to k.
+
+        Needed because the intended set is *settled* writes only, while the
+        replica also legitimately holds newer ones. Left unrestricted, a
+        replica that correctly returns a fresh vector in its top-k pushes a
+        settled one out of view and is scored as having missed it -- a
+        penalty for being up to date. Measured on lowdim data that cost
+        ~0.05 recall with completeness at exactly 1.0.
+
+        This only works because the caller over-fetches: with 3k results
+        requested, dropping the unsettled ones still leaves k to score.
+        """
         if not truth_ids:
             return float("nan")
         mat = np.asarray([vector_of[i] for i in truth_ids], dtype=np.float32)
         truth = exact_topk(queries, truth_ids, mat, k, metric)
-        per_query = [recall_at_k(o, t, k) for o, t in zip(observed, truth)]
+        per_query = []
+        for o, t in zip(observed, truth):
+            if restrict is not None:
+                o = [i for i in o if i in restrict]
+            per_query.append(recall_at_k(o[:k], t, k))
         per_query = [r for r in per_query if not np.isnan(r)]
         return float(np.mean(per_query)) if per_query else float("nan")
 
     return {
-        "index_recall": _mean_recall(local_known),
-        "e2e_recall": _mean_recall(intended_known),
+        # No restriction: everything the replica returns is in its own live
+        # set by construction, so its top-k is already the right comparison.
+        "index_recall": _mean_recall(local_known, None),
+        "e2e_recall": _mean_recall(intended_known, intended_ids),
         "completeness": set_completeness(local_ids, intended_ids),
         "n_local": float(len(local_ids)),
         "n_intended": float(len(intended_ids)),
