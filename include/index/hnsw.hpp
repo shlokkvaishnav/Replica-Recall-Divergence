@@ -29,6 +29,24 @@ namespace nanodb {
     static constexpr uint32_t NANODB_MAGIC = 0x4E444200; // "NDB\0"
     static constexpr size_t HEADER_SIZE = sizeof(FileHeader);
 
+    // Internal search candidate: 8 bytes, trivially copyable.
+    //
+    // The search used to carry `Result` through both priority queues, and
+    // Result holds a std::string for metadata -- 40 bytes with a constructor
+    // and destructor. The string is always empty during traversal, yet every
+    // sift-up and sift-down still move-constructed and destroyed one, and a
+    // heap operation does O(log n) of those. Metadata is now attached only to
+    // the k results that survive.
+    struct Cand {
+        float distance;
+        id_t id;
+        // Ordering is by distance only, so the default priority_queue
+        // comparator gives a max-heap (top() == farthest), which is what the
+        // bounded ef-nearest set needs.
+        bool operator<(const Cand& o) const { return distance < o.distance; }
+        bool operator>(const Cand& o) const { return distance > o.distance; }
+    };
+
     class HNSW {
     public:
         // -----------------------------------------------------------------------
@@ -93,7 +111,8 @@ namespace nanodb {
             if (offset + sizeof(Node) > storage_.get_size()) {
                 std::lock_guard<std::mutex> lock(global_resize_lock_);
                 if (offset + sizeof(Node) > storage_.get_size()) {
-                    storage_.resize(storage_.get_size() + 10 * 1024 * 1024);
+                    storage_.resize(grown_size(storage_.get_size(),
+                                               offset + sizeof(Node)));
                 }
             }
 
@@ -135,7 +154,7 @@ namespace nanodb {
 
             // Connect neighbors at each layer
             for (int l = std::min(level, current_max_layer_.load()); l >= 0; l--) {
-                std::priority_queue<Result> candidates =
+                std::priority_queue<Cand> candidates =
                     search_layer(curr_obj, node_ptr->vector, config::EF_CONSTRUCTION, l);
 
                 // search_layer returns a bounded MAX-heap of the ef nearest
@@ -152,7 +171,7 @@ namespace nanodb {
                 // Drain fully, then reverse to nearest-first -- the same
                 // ordering fix search() already applies before truncating to
                 // k -- and take the M nearest.
-                std::vector<Result> ordered;
+                std::vector<Cand> ordered;
                 ordered.reserve(candidates.size());
                 while (!candidates.empty()) {
                     ordered.push_back(candidates.top());
@@ -231,22 +250,37 @@ namespace nanodb {
             }
 
             int ef_search = (ef > 0) ? std::max(ef, k) : std::max(100, k);
-            std::priority_queue<Result> top_candidates =
+            std::priority_queue<Cand> top_candidates =
                 search_layer(curr_obj, query.data(), ef_search, 0);
 
-            std::vector<Result> results;
+            // Drain farthest-first, then reverse to nearest-first.
+            std::vector<Cand> ordered;
+            ordered.reserve(top_candidates.size());
             while (!top_candidates.empty()) {
-                Result r = top_candidates.top();
+                ordered.push_back(top_candidates.top());
                 top_candidates.pop();
-                // Skip tombstoned nodes
-                Node* n = get_node(r.id);
-                if (n->is_deleted) continue;
-                r.metadata = metadata_storage_.get_metadata(r.id);
-                results.push_back(r);
             }
-            std::reverse(results.begin(), results.end());
-            if (results.size() > (size_t)k) results.resize(k);
+            std::reverse(ordered.begin(), ordered.end());
 
+            // Metadata is fetched only for the k results actually returned.
+            //
+            // This loop used to run over all ef candidates -- 100 by default
+            // -- doing a seek and read against the metadata file for each,
+            // under MetadataHandler's single mutex, and then truncate to
+            // k=10. Ninety percent of that I/O was discarded, and because the
+            // lock is global it serialised concurrent searches while doing
+            // it. Truncating first turns 100 locked reads per query into 10.
+            std::vector<Result> results;
+            results.reserve(std::min((size_t)k, ordered.size()));
+            for (const Cand& c : ordered) {
+                if (results.size() >= (size_t)k) break;
+                if (get_node(c.id)->is_deleted) continue;   // skip tombstones
+                Result r;
+                r.id = c.id;
+                r.distance = c.distance;
+                r.metadata = metadata_storage_.get_metadata(c.id);
+                results.push_back(std::move(r));
+            }
             return results;
         }
 
@@ -342,6 +376,35 @@ namespace nanodb {
             h->max_layer = (int32_t)current_max_layer_;
         }
 
+        // Next file size that covers `needed`, growing geometrically.
+        //
+        // Two problems with the previous `get_size() + 10MB`:
+        //
+        // 1. Fixed-increment growth makes building an N-byte index O(N^2) in
+        //    copying -- N/10MB resizes, each moving progressively more data.
+        //    Doubling makes it O(N) amortised. Capped at MAX_GROWTH_STEP so a
+        //    large index cannot double into wildly over-allocated space; past
+        //    that point it grows linearly in big strides, which is O(N) too.
+        //
+        // 2. It added a single 10MB increment regardless of how far past the
+        //    end `needed` was. A sparse or out-of-order id could land beyond
+        //    the new size, and the caller would then write through get_node()
+        //    past the mapping. Dense sequential ids never triggered it, so it
+        //    stayed latent. Looping until the size actually covers `needed`
+        //    removes the assumption.
+        static size_t grown_size(size_t current, size_t needed) {
+            static constexpr size_t MIN_GROWTH_STEP = 10u * 1024 * 1024;
+            static constexpr size_t MAX_GROWTH_STEP = 256u * 1024 * 1024;
+            size_t next = current;
+            while (next < needed) {
+                size_t step = next;                      // double...
+                if (step > MAX_GROWTH_STEP) step = MAX_GROWTH_STEP;
+                if (step < MIN_GROWTH_STEP) step = MIN_GROWTH_STEP;
+                next += step;
+            }
+            return next;
+        }
+
         Node* get_node(id_t id) {
             return reinterpret_cast<Node*>((char*)storage_.get_data() + HEADER_SIZE + (size_t)id * sizeof(Node));
         }
@@ -373,38 +436,67 @@ namespace nanodb {
             return level;
         }
 
+        // Marks a node id as seen for the current traversal.
+        //
+        // The old form allocated a std::vector<bool> sized to the whole index
+        // and zeroed it on every call -- ~95k entries at a 100 MB file,
+        // several times per query, then thrown away. Here one thread-local
+        // array of epoch stamps is reused: a node counts as visited when its
+        // stamp equals the current epoch, so "clearing" the set is a single
+        // increment. O(1) per traversal instead of O(index size).
+        //
+        // Thread-local rather than pooled because search_layer runs
+        // concurrently and the cost is small: 4 bytes per addressable node
+        // per searching thread.
+        //
+        // Sizing still comes from storage capacity, not element_count_.
+        // element_count_ is the *live* count and delete_vector() decrements
+        // it, so after deletions it under-covers the id space still present
+        // in the graph, and the bounds check below then silently skips valid
+        // neighbours -- bleeding recall in proportion to the delete count,
+        // which is exactly the workload this index gets measured on.
+        struct VisitedSet {
+            std::vector<uint32_t> stamp;
+            uint32_t epoch = 0;
+
+            void begin(size_t capacity) {
+                if (stamp.size() < capacity) {
+                    stamp.assign(capacity, 0);
+                    epoch = 0;
+                }
+                if (++epoch == 0) {                 // wrapped after 2^32 traversals
+                    std::fill(stamp.begin(), stamp.end(), 0u);
+                    epoch = 1;
+                }
+            }
+            bool test_and_set(id_t id) {
+                if (id >= stamp.size()) return true;   // out of range: treat as seen
+                if (stamp[id] == epoch) return true;
+                stamp[id] = epoch;
+                return false;
+            }
+        };
+
         // Core beam-search within a single HNSW layer.
         // Tombstoned nodes are skipped during neighbor expansion.
-        std::priority_queue<Result> search_layer(id_t entry_point, const float* query_vec,
-                                                  int ef, int layer) {
-            // visited must be indexable by any node id reachable in the graph.
-            // Sizing it from element_count_ was wrong in both directions:
-            // element_count_ is the *live* count, and delete_vector()
-            // decrements it, so after deletions the bitmap was smaller than
-            // the id space still present in the graph. The bounds check in
-            // the expansion loop below then silently skipped valid neighbors,
-            // bleeding recall in proportion to the number of deletes -- i.e.
-            // exactly the workload this index is being measured on.
-            //
-            // Storage capacity is the correct bound: insert() grows the file
-            // so that HEADER_SIZE + id*sizeof(Node) + sizeof(Node) always
-            // fits, so every addressable node id is < capacity by
-            // construction, and it survives restarts without extra state.
-            size_t capacity = (storage_.get_size() - HEADER_SIZE) / sizeof(Node);
-            std::vector<bool> visited(capacity, false);
-            std::priority_queue<Result, std::vector<Result>, std::greater<Result>> candidates;
-            std::priority_queue<Result> found_results;
+        std::priority_queue<Cand> search_layer(id_t entry_point, const float* query_vec,
+                                                int ef, int layer) {
+            static thread_local VisitedSet visited;
+            visited.begin((storage_.get_size() - HEADER_SIZE) / sizeof(Node));
+
+            std::priority_queue<Cand, std::vector<Cand>, std::greater<Cand>> candidates;
+            std::priority_queue<Cand> found_results;
 
             float d = compute_distance(query_vec, get_node(entry_point)->vector,
                                        config::VECTOR_DIM, metric_);
-            Result start_node = {entry_point, d};
+            Cand start_node{d, entry_point};
             candidates.push(start_node);
             // Only add to found_results if not deleted
             if (!get_node(entry_point)->is_deleted) found_results.push(start_node);
-            if (entry_point < visited.size()) visited[entry_point] = true;
+            visited.test_and_set(entry_point);
 
             while (!candidates.empty()) {
-                Result curr = candidates.top();
+                Cand curr = candidates.top();
                 candidates.pop();
 
                 if (!found_results.empty() &&
@@ -414,16 +506,15 @@ namespace nanodb {
                 Node* curr_node = get_node(curr.id);
                 for (int i = 0; i < curr_node->neighbor_counts[layer]; i++) {
                     id_t neighbor_id = curr_node->neighbors[layer][i];
-                    if (neighbor_id >= visited.size() || visited[neighbor_id]) continue;
-                    visited[neighbor_id] = true;
+                    if (visited.test_and_set(neighbor_id)) continue;
 
                     float dist = compute_distance(query_vec, get_node(neighbor_id)->vector,
                                                   config::VECTOR_DIM, metric_);
                     if (found_results.size() < (size_t)ef || dist < found_results.top().distance) {
-                        candidates.push({neighbor_id, dist});
+                        candidates.push({dist, neighbor_id});
                         // Only add live nodes to results
                         if (!get_node(neighbor_id)->is_deleted) {
-                            found_results.push({neighbor_id, dist});
+                            found_results.push({dist, neighbor_id});
                             if (found_results.size() > (size_t)ef) found_results.pop();
                         }
                     }
@@ -452,7 +543,7 @@ namespace nanodb {
         //
         // `ordered` must be sorted nearest-first and each Result::distance
         // must be the distance to the base element being linked.
-        std::vector<id_t> select_neighbors_heuristic(const std::vector<Result>& ordered,
+        std::vector<id_t> select_neighbors_heuristic(const std::vector<Cand>& ordered,
                                                       size_t max_keep,
                                                       id_t exclude_id) {
             std::vector<id_t> selected;
@@ -462,7 +553,7 @@ namespace nanodb {
             // between: pruning here would only under-connect a young graph.
             const bool keep_all = ordered.size() <= max_keep;
 
-            for (const Result& cand : ordered) {
+            for (const Cand& cand : ordered) {
                 if (selected.size() >= max_keep) break;
                 if (cand.id == exclude_id) continue;
 
@@ -510,17 +601,17 @@ namespace nanodb {
                 }
 
                 if (!already_linked) {
-                    std::vector<Result> cands;
+                    std::vector<Cand> cands;
                     cands.reserve((size_t)count + 1);
                     for (int i = 0; i < count; ++i) {
                         id_t n = node->neighbors[layer][i];
-                        cands.push_back({n, compute_distance(node->vector, get_node(n)->vector,
-                                                              config::VECTOR_DIM, metric_), ""});
+                        cands.push_back({compute_distance(node->vector, get_node(n)->vector,
+                                                          config::VECTOR_DIM, metric_), n});
                     }
-                    cands.push_back({dest, compute_distance(node->vector, get_node(dest)->vector,
-                                                             config::VECTOR_DIM, metric_), ""});
+                    cands.push_back({compute_distance(node->vector, get_node(dest)->vector,
+                                                      config::VECTOR_DIM, metric_), dest});
                     std::sort(cands.begin(), cands.end(),
-                              [](const Result& a, const Result& b) {
+                              [](const Cand& a, const Cand& b) {
                                   return a.distance < b.distance;
                               });
 

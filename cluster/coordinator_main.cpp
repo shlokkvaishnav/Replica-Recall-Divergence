@@ -9,6 +9,11 @@
 #include <shared_mutex>
 #include <atomic>
 #include <set>
+#include <thread>
+#include <condition_variable>
+#include <functional>
+#include <unordered_set>
+#include <queue>
 #include <map>
 
 #include "httplib.h"
@@ -42,6 +47,79 @@ void signal_handler(int) {
     if (g_raft_server) g_raft_server->Shutdown();
     g_apply_poller_running = false;
     g_health_check_running = false;
+}
+
+// Fixed pool of worker threads for RPC fan-out.
+//
+// Every write previously spawned one OS thread per replica and every query
+// one per shard, via std::async(std::launch::async) -- roughly 440 thread
+// creations a second at the measured write rate, purely to make three
+// network calls each. Thread creation is tens of microseconds and the work
+// is pure I/O wait, so the threads existed almost entirely to be blocked.
+//
+// A bounded pool cannot deadlock here: fan-out submits tasks and then waits
+// on the futures from the *calling* thread (an httplib worker), never from
+// a pool thread, so pool threads never block on other pool tasks. If the
+// pool is saturated the extra work queues, which is backpressure rather
+// than unbounded thread growth.
+class ThreadPool {
+public:
+    explicit ThreadPool(size_t n) {
+        workers_.reserve(n);
+        for (size_t i = 0; i < n; ++i) {
+            workers_.emplace_back([this] {
+                for (;;) {
+                    std::function<void()> task;
+                    {
+                        std::unique_lock<std::mutex> lk(m_);
+                        cv_.wait(lk, [this] { return stop_ || !q_.empty(); });
+                        if (stop_ && q_.empty()) return;
+                        task = std::move(q_.front());
+                        q_.pop();
+                    }
+                    task();
+                }
+            });
+        }
+    }
+
+    ~ThreadPool() {
+        { std::lock_guard<std::mutex> lk(m_); stop_ = true; }
+        cv_.notify_all();
+        for (auto& t : workers_) if (t.joinable()) t.join();
+    }
+
+    template <class F>
+    auto submit(F&& f) -> std::future<decltype(f())> {
+        using R = decltype(f());
+        auto task = std::make_shared<std::packaged_task<R()>>(std::forward<F>(f));
+        std::future<R> fut = task->get_future();
+        {
+            std::lock_guard<std::mutex> lk(m_);
+            q_.emplace([task] { (*task)(); });
+        }
+        cv_.notify_one();
+        return fut;
+    }
+
+private:
+    std::vector<std::thread> workers_;
+    std::queue<std::function<void()>> q_;
+    std::mutex m_;
+    std::condition_variable cv_;
+    bool stop_ = false;
+};
+
+// Deliberately leaked: joining worker threads during static destruction can
+// hang if gRPC has already torn itself down, and the process is exiting
+// anyway.
+static ThreadPool& rpc_pool() {
+    static ThreadPool* pool = [] {
+        const char* env = std::getenv("NANODB_RPC_POOL_THREADS");
+        size_t n = env ? (size_t)std::max(1, std::atoi(env)) : 32;
+        return new ThreadPool(n);
+    }();
+    return *pool;
 }
 
 struct ShardClient {
@@ -360,7 +438,7 @@ static QuorumResult quorum_insert(const std::vector<ShardClient*>& replicas,
         if (replicas[i]->is_primary) primary_idx = (int)i;
         auto* sc = replicas[i];
         uint64_t epoch = sc->epoch.load();
-        futures.push_back(std::async(std::launch::async, [sc, external_id, vec, metadata, epoch]() {
+        futures.push_back(rpc_pool().submit( [sc, external_id, vec, metadata, epoch]() {
             InsertRequest req;
             req.set_external_id(external_id);
             for (float f : vec) req.add_vector(f);
@@ -391,7 +469,7 @@ static QuorumResult quorum_delete(const std::vector<ShardClient*>& replicas, con
         if (replicas[i]->is_primary) primary_idx = (int)i;
         auto* sc = replicas[i];
         uint64_t epoch = sc->epoch.load();
-        futures.push_back(std::async(std::launch::async, [sc, external_id, epoch]() {
+        futures.push_back(rpc_pool().submit( [sc, external_id, epoch]() {
             DeleteRequest req;
             req.set_external_id(external_id);
             req.set_epoch(epoch);
@@ -744,7 +822,7 @@ int main() {
             auto pool = select_read_targets(live_shards(), consistency);
             std::vector<std::future<std::pair<int, SearchResponse>>> futures;
             for (auto* sc : pool) {
-                futures.push_back(std::async(std::launch::async, [sc, vec, k]() {
+                futures.push_back(rpc_pool().submit( [sc, vec, k]() {
                     SearchRequest grpc_req;
                     for (float f : vec) grpc_req.add_vector(f);
                     grpc_req.set_k(k);
@@ -757,31 +835,68 @@ int main() {
                 }));
             }
 
-            std::vector<json> merged;
+            // Each shard returns its own results already sorted by distance,
+            // so merging them is a k-way merge, not a sort.
+            //
+            // This was previously built as a std::vector<json>, sorted with a
+            // comparator that did a["distance"].get<float>() -- two hash
+            // lookups plus a variant unwrap on every comparison, O(n log n)
+            // times -- and then truncated to k. Now the results stay as plain
+            // structs, a heap over the per-shard cursors yields them in
+            // ascending order, and the loop stops the moment it has k. That
+            // is O(N log S) with early exit rather than O(N log N), and JSON
+            // is only constructed for the k results actually returned.
+            std::vector<std::vector<const SearchResult*>> per_shard;
+            std::vector<SearchResponse> responses;
             std::vector<int> unavailable;
+            responses.reserve(futures.size());
             for (auto& fut : futures) {
                 auto [shard_id, grpc_res] = fut.get();
                 if (!grpc_res.ok()) { unavailable.push_back(shard_id); continue; }
-                for (const auto& r : grpc_res.results()) {
-                    merged.push_back({{"id", r.external_id()}, {"distance", r.distance()}, {"metadata", r.metadata()}});
-                }
+                responses.push_back(std::move(grpc_res));
             }
-            std::sort(merged.begin(), merged.end(), [](const json& a, const json& b) {
-                return a["distance"].get<float>() < b["distance"].get<float>();
-            });
+            per_shard.reserve(responses.size());
+            for (const auto& resp : responses) {
+                std::vector<const SearchResult*> v;
+                v.reserve(resp.results_size());
+                for (const auto& r : resp.results()) v.push_back(&r);
+                if (!v.empty()) per_shard.push_back(std::move(v));
+            }
+
+            // Cursor into one shard's sorted list; the heap pops the globally
+            // nearest unconsumed result each time.
+            struct Cursor {
+                float distance;
+                size_t shard;
+                size_t idx;
+                bool operator>(const Cursor& o) const { return distance > o.distance; }
+            };
+            std::priority_queue<Cursor, std::vector<Cursor>, std::greater<Cursor>> pq;
+            for (size_t s = 0; s < per_shard.size(); ++s) {
+                pq.push({per_shard[s][0]->distance(), s, 0});
+            }
 
             // Dedupe by id, keep the first (lowest-distance) occurrence. A
             // key mid-migration can briefly exist on two shards; this is the
             // free fix for that, independent of whether a rebalance is
             // actually running right now.
             std::vector<json> deduped;
-            std::set<std::string> seen;
-            for (auto& r : merged) {
-                std::string id = r["id"].get<std::string>();
-                if (seen.count(id)) continue;
-                seen.insert(id);
-                deduped.push_back(r);
-                if (deduped.size() >= (size_t)k) break;
+            deduped.reserve(k);
+            std::unordered_set<std::string> seen;
+            seen.reserve((size_t)k * 2);
+            while (!pq.empty() && deduped.size() < (size_t)k) {
+                Cursor c = pq.top();
+                pq.pop();
+                const SearchResult* r = per_shard[c.shard][c.idx];
+                if (seen.insert(r->external_id()).second) {
+                    deduped.push_back({{"id", r->external_id()},
+                                       {"distance", r->distance()},
+                                       {"metadata", r->metadata()}});
+                }
+                if (c.idx + 1 < per_shard[c.shard].size()) {
+                    pq.push({per_shard[c.shard][c.idx + 1]->distance(),
+                             c.shard, c.idx + 1});
+                }
             }
 
             json response = {{"results", deduped}, {"consistency", consistency}};

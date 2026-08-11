@@ -17,7 +17,7 @@ import numpy as np
 sys.path.insert(0, __file__.rsplit("replica_recall", 1)[0] + "replica_recall")
 
 from metrics import (                                   # noqa: E402
-    exact_topk, recall_at_k, set_completeness,
+    Corpus, exact_topk, exact_topk_rows, recall_at_k, set_completeness,
     pairwise_agreement, leave_one_out_agreement, score_replica,
 )
 
@@ -155,6 +155,50 @@ def test_leave_one_out_agreement():
           loo3["r2"] < loo3["r0"], f"got {loo3}")
 
 
+def test_corpus_gather():
+    """The Corpus replaced a per-call dict-to-array rebuild. It has to return
+    exactly what the old path did, or every measurement shifts silently."""
+    print("\ntest_corpus_gather")
+
+    n, dim, nq, k = 500, 24, 12, 8
+    ids = [f"v{i}" for i in range(n)]
+    vecs = RNG.random((n, dim), dtype=np.float32)
+    vector_of = {i: vecs[j] for j, i in enumerate(ids)}
+    qs = RNG.random((nq, dim), dtype=np.float32)
+    c = Corpus.from_dict(vector_of)
+
+    subset = set(ids[:137]) | set(ids[300:412])
+    rows = c.rows_for(subset)
+    check("rows_for returns one row per known id", len(rows) == len(subset))
+    check("rows_for is ascending", bool(np.all(np.diff(rows) > 0)))
+    check("rows_for maps back to the right ids",
+          {c.ids[r] for r in rows} == subset)
+
+    check("rows_for drops unknown ids",
+          len(c.rows_for({"nope", "also-nope"})) == 0)
+    check("rows_for on empty input is empty", len(c.rows_for(set())) == 0)
+
+    # The gather path must agree with building the matrix the old way.
+    sub_ids = [c.ids[r] for r in rows]
+    old_mat = np.asarray([vector_of[i] for i in sub_ids], dtype=np.float32)
+    check("gathered matrix equals the rebuilt one",
+          bool(np.array_equal(c.mat[rows], old_mat)))
+
+    want = exact_topk(qs, sub_ids, old_mat, k, "l2")
+    got_rows = exact_topk_rows(qs, c.mat[rows], k, "l2")
+    got = [[c.ids[rows[j]] for j in r] for r in got_rows]
+    check("row-based top-k matches id-based top-k", got == want)
+
+    # Growth must not disturb rows already handed out: a snapshot taken
+    # before an append has to keep resolving correctly afterwards.
+    grown = dict(vector_of)
+    for j in range(50):
+        grown[f"new{j}"] = RNG.random(dim, dtype=np.float32)
+    c2 = Corpus.from_dict(grown)
+    check("existing ids keep their vectors after growth",
+          bool(np.array_equal(c2.mat[c2.rows_for({"v7"})][0], vector_of["v7"])))
+
+
 def test_decomposition_separates_causes():
     """The core claim: index_recall isolates graph quality, completeness
     isolates data content, and e2e_recall reflects both."""
@@ -170,7 +214,7 @@ def test_decomposition_separates_causes():
     truth_full = exact_topk(qs, ids, vecs, k, "l2")
 
     # (a) Healthy replica: has everything, search is exact.
-    healthy = score_replica(qs, truth_full, set(ids), intended, vector_of, k)
+    healthy = score_replica(qs, truth_full, set(ids), intended, Corpus.from_dict(vector_of), k)
     check("healthy: index_recall == 1", approx(healthy["index_recall"], 1.0))
     check("healthy: completeness == 1", approx(healthy["completeness"], 1.0))
     check("healthy: e2e_recall == 1", approx(healthy["e2e_recall"], 1.0))
@@ -181,7 +225,7 @@ def test_decomposition_separates_causes():
     kept = ids[:280]
     kept_mat = np.asarray([vector_of[i] for i in kept], dtype=np.float32)
     obs_lossy = exact_topk(qs, kept, kept_mat, k, "l2")
-    lossy = score_replica(qs, obs_lossy, set(kept), intended, vector_of, k)
+    lossy = score_replica(qs, obs_lossy, set(kept), intended, Corpus.from_dict(vector_of), k)
     check("data-loss: index_recall stays 1 (graph is fine)",
           approx(lossy["index_recall"], 1.0),
           f"got {lossy['index_recall']:.4f}")
@@ -194,7 +238,7 @@ def test_decomposition_separates_causes():
     #     completeness must stay 1; index_recall must drop.
     obs_bad = [t[:3] + [f"v{int(RNG.integers(0, n))}" for _ in range(k - 3)]
                for t in truth_full]
-    degraded = score_replica(qs, obs_bad, set(ids), intended, vector_of, k)
+    degraded = score_replica(qs, obs_bad, set(ids), intended, Corpus.from_dict(vector_of), k)
     check("degraded-graph: completeness stays 1 (data is fine)",
           approx(degraded["completeness"], 1.0))
     check("degraded-graph: index_recall drops",
@@ -245,6 +289,7 @@ if __name__ == "__main__":
     test_recall_and_completeness()
     test_pairwise_agreement()
     test_leave_one_out_agreement()
+    test_corpus_gather()
     test_decomposition_separates_causes()
     test_agreement_tracks_divergence()
 

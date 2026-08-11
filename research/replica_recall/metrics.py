@@ -72,6 +72,84 @@ import numpy as np
 # Exact search (ground truth)
 # ---------------------------------------------------------------------------
 
+class Corpus:
+    """Contiguous view of the confirmed vectors plus an id -> row index.
+
+    Ground truth used to be assembled by list-comprehending a dict into a
+    fresh (N, dim) array on every scoring call -- twice per replica, so
+    twelve times per sample round on a 2x3 cluster. That is O(N) interpreted
+    dict lookups plus a full copy of the corpus, twelve times, and it grows
+    with the run.
+
+    Here the array is maintained incrementally by the writer (geometric
+    growth, so appends are O(1) amortised rather than O(N) per insert), and
+    scoring gathers rows out of it. Snapshots are O(1): ids only ever get
+    appended, so capturing the row count and the current array reference is
+    enough, and a later reallocation cannot disturb a reader holding the old
+    one.
+    """
+
+    __slots__ = ("ids", "mat", "row_of", "n")
+
+    def __init__(self, ids: list[str], mat: np.ndarray,
+                 row_of: dict[str, int], n: int):
+        self.ids = ids
+        self.mat = mat
+        self.row_of = row_of
+        self.n = n
+
+    @classmethod
+    def from_dict(cls, vector_of: dict[str, np.ndarray]) -> "Corpus":
+        """Build from an id -> vector mapping. For tests and one-off analysis;
+        the live experiment maintains the array incrementally instead."""
+        ids = list(vector_of)
+        if not ids:
+            return cls([], np.empty((0, 0), dtype=np.float32), {}, 0)
+        mat = np.asarray([vector_of[i] for i in ids], dtype=np.float32)
+        return cls(ids, mat, {i: r for r, i in enumerate(ids)}, len(ids))
+
+    def rows_for(self, wanted) -> np.ndarray:
+        """Row indices for `wanted`, ascending. Ids not in the snapshot are
+        dropped -- they cannot be scored and guessing would corrupt the
+        measurement. Ascending order makes the gather deterministic and
+        gives the memory subsystem a sequential access pattern."""
+        row_of, n = self.row_of, self.n
+        rows = [r for r in (row_of.get(i, -1) for i in wanted) if 0 <= r < n]
+        if not rows:
+            return np.empty(0, dtype=np.int64)
+        out = np.fromiter(rows, dtype=np.int64, count=len(rows))
+        out.sort()
+        return out
+
+
+def exact_topk_rows(queries: np.ndarray,
+                    vectors: np.ndarray,
+                    k: int,
+                    metric: str = "l2") -> np.ndarray:
+    """Exact top-k as ROW INDICES into `vectors`, shape (nq, k).
+
+    Returning indices rather than ids is what keeps the interpreted work
+    proportional to nq*k instead of N: only the k winners per query ever get
+    mapped back to an id.
+    """
+    n = len(vectors)
+    if n == 0:
+        return np.empty((len(queries), 0), dtype=np.int64)
+    k_eff = min(k, n)
+
+    if metric == "l2":
+        d = (vectors * vectors).sum(axis=1)[None, :] - 2.0 * (queries @ vectors.T)
+    elif metric == "ip":
+        d = -(queries @ vectors.T)
+    else:
+        raise ValueError(f"unknown metric: {metric!r}")
+
+    part = np.argpartition(d, k_eff - 1, axis=1)[:, :k_eff]
+    rows = np.arange(len(queries))[:, None]
+    order = np.argsort(d[rows, part], axis=1)
+    return part[rows, order]
+
+
 def exact_topk(queries: np.ndarray,
                ids: list[str],
                vectors: np.ndarray,
@@ -90,25 +168,7 @@ def exact_topk(queries: np.ndarray,
     """
     if len(ids) == 0:
         return [[] for _ in range(len(queries))]
-
-    k_eff = min(k, len(ids))
-
-    if metric == "l2":
-        # ||q - x||^2 = ||q||^2 - 2 q.x + ||x||^2
-        # ||q||^2 is constant within a query row, so it does not affect the
-        # ranking and is dropped.
-        d = (vectors * vectors).sum(axis=1)[None, :] - 2.0 * (queries @ vectors.T)
-    elif metric == "ip":
-        d = -(queries @ vectors.T)
-    else:
-        raise ValueError(f"unknown metric: {metric!r}")
-
-    # argpartition for the k smallest, then sort just that slice.
-    part = np.argpartition(d, k_eff - 1, axis=1)[:, :k_eff]
-    rows = np.arange(len(queries))[:, None]
-    order = np.argsort(d[rows, part], axis=1)
-    top = part[rows, order]
-
+    top = exact_topk_rows(queries, vectors, k, metric)
     return [[ids[j] for j in row] for row in top]
 
 
@@ -220,9 +280,10 @@ def score_replica(queries: np.ndarray,
                   observed: list[list[str]],
                   local_ids: set[str],
                   intended_ids: set[str],
-                  vector_of: dict[str, np.ndarray],
+                  corpus: "Corpus",
                   k: int,
-                  metric: str = "l2") -> dict[str, float]:
+                  metric: str = "l2",
+                  intended_rows: np.ndarray | None = None) -> dict[str, float]:
     """Compute the three ground-truth metrics for one replica at one instant.
 
     observed     : per-query id lists returned by THIS replica's Search
@@ -233,21 +294,50 @@ def score_replica(queries: np.ndarray,
     Ids the harness has no vector for are excluded from ground truth: they
     cannot be scored, and guessing would corrupt the measurement.
     """
-    local_known = [i for i in sorted(local_ids) if i in vector_of]
-    intended_known = [i for i in sorted(intended_ids) if i in vector_of]
+    # Row indices, not id lists. The old form sorted up to N strings twice
+    # per replica -- a string comparison sort over the whole corpus, twelve
+    # times a round -- purely for determinism. Corpus order is insertion
+    # order, which is already deterministic, so ascending rows give the same
+    # guarantee for the cost of an integer sort.
+    local_rows = corpus.rows_for(local_ids)
+    if intended_rows is None:
+        intended_rows = corpus.rows_for(intended_ids)
 
-    def _mean_recall(truth_ids: list[str]) -> float:
-        if not truth_ids:
+    def _mean_recall(rows: np.ndarray, restrict: set[str] | None) -> float:
+        """`restrict` limits the replica's answer to ids the truth set could
+        contain, before truncating to k.
+
+        Needed because the intended set is *settled* writes only, while the
+        replica also legitimately holds newer ones. Left unrestricted, a
+        replica that correctly returns a fresh vector in its top-k pushes a
+        settled one out of view and is scored as having missed it -- a
+        penalty for being up to date. Measured on lowdim data that cost
+        ~0.05 recall with completeness at exactly 1.0.
+
+        This only works because the caller over-fetches: with 3k results
+        requested, dropping the unsettled ones still leaves k to score.
+        """
+        if len(rows) == 0:
             return float("nan")
-        mat = np.asarray([vector_of[i] for i in truth_ids], dtype=np.float32)
-        truth = exact_topk(queries, truth_ids, mat, k, metric)
-        per_query = [recall_at_k(o, t, k) for o, t in zip(observed, truth)]
+        sub = corpus.mat[rows]                       # one vectorised gather
+        top = exact_topk_rows(queries, sub, k, metric)
+        cids = corpus.ids
+        per_query = []
+        for o, trow in zip(observed, top):
+            # Only the k winners are mapped back to ids, so the interpreted
+            # work is nq*k rather than N.
+            t = [cids[rows[j]] for j in trow]
+            if restrict is not None:
+                o = [i for i in o if i in restrict]
+            per_query.append(recall_at_k(o[:k], t, k))
         per_query = [r for r in per_query if not np.isnan(r)]
         return float(np.mean(per_query)) if per_query else float("nan")
 
     return {
-        "index_recall": _mean_recall(local_known),
-        "e2e_recall": _mean_recall(intended_known),
+        # No restriction: everything the replica returns is in its own live
+        # set by construction, so its top-k is already the right comparison.
+        "index_recall": _mean_recall(local_rows, None),
+        "e2e_recall": _mean_recall(intended_rows, intended_ids),
         "completeness": set_completeness(local_ids, intended_ids),
         "n_local": float(len(local_ids)),
         "n_intended": float(len(intended_ids)),

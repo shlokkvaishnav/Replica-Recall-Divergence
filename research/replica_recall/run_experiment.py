@@ -34,6 +34,7 @@ import shutil
 import sys
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 
 import numpy as np
 
@@ -44,7 +45,7 @@ sys.path.insert(0, ROOT)
 
 import chaos_harness as ch                                        # noqa: E402
 from metrics import (                                             # noqa: E402
-    score_replica, pairwise_agreement, leave_one_out_agreement,
+    Corpus, score_replica, pairwise_agreement, leave_one_out_agreement,
 )
 import probe as probe_mod                                         # noqa: E402
 
@@ -64,22 +65,72 @@ class RetainingWriter:
     settling window -- see intended_set().
     """
 
-    def __init__(self, dim: int, seed: int):
+    def __init__(self, dim: int, seed: int, dist: str = "uniform",
+                 intrinsic_dim: int = 12, noise: float = 0.02):
         self.dim = dim
         self.lock = threading.Lock()
         self.vector_of: dict[str, np.ndarray] = {}
         self.confirmed_at: dict[str, float] = {}
         self.attempted = 0
         self.failed = 0
-        self._rng = np.random.default_rng(seed)
         self._next = 0
+        # Contiguous corpus backing exact ground truth; see _append_corpus.
+        self._corpus_ids: list[str] = []
+        self._corpus_mat = np.empty((0, dim), dtype=np.float32)
+        self._corpus_row: dict[str, int] = {}
+        self._corpus_n = 0
+        self._seed = seed
+        self._dist = dist
+        self._intrinsic = intrinsic_dim
+        self._noise = noise
+
+        # Per-thread generators. numpy Generators are NOT thread-safe, and
+        # this ran unlocked across --writers threads -- the vectors were still
+        # arbitrary points so the measurements survive, but the stream was
+        # undefined and the run was not reproducible from its seed, which it
+        # is supposed to be. Seeded from (seed, thread index) so a fixed
+        # writer count gives a deterministic corpus.
+        self._tls = threading.local()
+        self._thread_counter = 0
+
+        if dist == "lowdim":
+            # Sample in a low-dimensional subspace and project up. Uniform
+            # random points in 128-d suffer distance concentration -- nearest
+            # and farthest distances converge, so the true top-k is close to
+            # arbitrary and recall falls with N for reasons that have nothing
+            # to do with the index. Real embeddings sit at low intrinsic
+            # dimensionality; measured on this generator the index holds
+            # recall@10 = 1.000 to 20k where uniform gives 0.726.
+            proj_rng = np.random.default_rng([seed, 0xC0FFEE])
+            self._proj = proj_rng.standard_normal(
+                (intrinsic_dim, dim)).astype(np.float32)
+        elif dist == "uniform":
+            self._proj = None
+        else:
+            raise ValueError(f"unknown --dist: {dist!r}")
+
+    def _rng(self):
+        r = getattr(self._tls, "rng", None)
+        if r is None:
+            with self.lock:
+                idx = self._thread_counter
+                self._thread_counter += 1
+            r = np.random.default_rng([self._seed, idx])
+            self._tls.rng = r
+        return r
 
     def _make(self) -> tuple[str, np.ndarray]:
         with self.lock:
             vid = f"rr-{self._next}"
             self._next += 1
-        vec = self._rng.random(self.dim, dtype=np.float32) * 2.0 - 1.0
-        return vid, vec
+        rng = self._rng()
+        if self._proj is None:
+            vec = rng.random(self.dim, dtype=np.float32) * 2.0 - 1.0
+        else:
+            z = rng.standard_normal(self._intrinsic).astype(np.float32)
+            vec = (z @ self._proj) / np.float32(self._intrinsic)
+            vec += rng.standard_normal(self.dim).astype(np.float32) * np.float32(self._noise)
+        return vid, vec.astype(np.float32)
 
     def loop(self, stop_evt: threading.Event, node_ids: list[int]) -> None:
         while not stop_evt.is_set():
@@ -96,6 +147,7 @@ class RetainingWriter:
                     with self.lock:
                         self.vector_of[vid] = vec
                         self.confirmed_at[vid] = time.time()
+                        self._append_corpus(vid, vec)
                 else:
                     with self.lock:
                         self.failed += 1
@@ -103,6 +155,24 @@ class RetainingWriter:
                 with self.lock:
                     self.failed += 1
             time.sleep(0.01)
+
+    def make_queries(self, n: int) -> np.ndarray:
+        """Query set drawn from the SAME distribution as the corpus.
+
+        Non-negotiable for lowdim: the corpus lives on a 12-dimensional
+        manifold inside 128-space, so a uniform query would sit far off it and
+        its nearest neighbours would be essentially arbitrary -- measuring
+        nothing about the index. Uses its own generator seeded off the run
+        seed, so the query set is fixed across samples and reproducible across
+        runs without consuming from any writer's stream.
+        """
+        qrng = np.random.default_rng([self._seed, 0xDEC0DE])
+        if self._proj is None:
+            return qrng.random((n, self.dim), dtype=np.float32) * 2.0 - 1.0
+        z = qrng.standard_normal((n, self._intrinsic)).astype(np.float32)
+        q = (z @ self._proj) / np.float32(self._intrinsic)
+        q += qrng.standard_normal((n, self.dim)).astype(np.float32) * np.float32(self._noise)
+        return q.astype(np.float32)
 
     def intended_set(self, settle_s: float) -> set[str]:
         """Ids confirmed at least `settle_s` ago.
@@ -115,6 +185,35 @@ class RetainingWriter:
         cutoff = time.time() - settle_s
         with self.lock:
             return {i for i, t in self.confirmed_at.items() if t <= cutoff}
+
+    def _append_corpus(self, vid: str, vec: np.ndarray) -> None:
+        """Append to the contiguous corpus. Caller holds self.lock.
+
+        Geometric growth, so the amortised cost of an append is O(1). Growing
+        by a fixed increment would make building an N-vector corpus O(N^2) in
+        copying -- the same amortised-analysis point as the mmap resize in
+        the C++ storage layer, which grows by a flat 10 MB.
+        """
+        if self._corpus_n == len(self._corpus_mat):
+            new_cap = max(1024, len(self._corpus_mat) * 2)
+            grown = np.empty((new_cap, self.dim), dtype=np.float32)
+            grown[:self._corpus_n] = self._corpus_mat[:self._corpus_n]
+            self._corpus_mat = grown
+        self._corpus_mat[self._corpus_n] = vec
+        self._corpus_row[vid] = self._corpus_n
+        self._corpus_ids.append(vid)
+        self._corpus_n += 1
+
+    def snapshot_corpus(self) -> Corpus:
+        """O(1) snapshot: capture the row count and the current array.
+
+        Safe without copying because ids are only ever appended. Rows below
+        `n` never move, and if a later append reallocates, this reader keeps
+        the old array -- which still holds the first `n` rows correctly.
+        """
+        with self.lock:
+            return Corpus(self._corpus_ids, self._corpus_mat,
+                          self._corpus_row, self._corpus_n)
 
     def snapshot_vectors(self) -> dict[str, np.ndarray]:
         with self.lock:
@@ -130,19 +229,46 @@ def sample_once(probes, writer: RetainingWriter, queries: np.ndarray,
     """One full sweep over every replica. Returns a list of row dicts."""
     t = time.time()
     intended_all = writer.intended_set(settle_s)
-    vector_of = writer.snapshot_vectors()
+    corpus = writer.snapshot_corpus()
 
     # Phase 1: collect raw observations from every replica.
-    raw: dict[str, dict] = {}
-    for p in probes:
+    # Over-fetch. score_replica must drop results that fall outside the
+    # settled intended set before truncating to k; without spare results to
+    # draw on, that filtering would just shorten the list and under-report
+    # e2e_recall. 3k leaves ample headroom at realistic write rates.
+    k_fetch = k * 3
+
+    # Probe every replica CONCURRENTLY.
+    #
+    # This is a correctness fix as much as a speed one. Probing serially
+    # meant 100 round trips per replica, one after another, so the last
+    # replica was measured seconds after the first -- while writes continued
+    # the whole time. Q1 asks whether replicas disagree "at the same
+    # instant", and that claim was only true to within the width of the
+    # sweep. Issuing them together collapses that window to roughly one
+    # replica's probe time.
+    #
+    # Threads rather than processes because these are gRPC round trips: the
+    # GIL is released during the wait, and each ReplicaProbe owns its own
+    # channel and is touched by exactly one worker.
+    def _probe_one(p):
         ok_ids, local = p.list_local_ids()
-        ok_search, obs = (p.search_batch(queries, k) if ok_ids else (False, []))
-        raw[p.name] = {
+        ok_search, obs = (p.search_batch(queries, k_fetch) if ok_ids
+                          else (False, []))
+        return p.name, {
             "probe": p,
             "reachable": bool(ok_ids and ok_search),
             "local": local,
             "obs": obs,
         }
+
+    t_probe = time.time()
+    raw: dict[str, dict] = {}
+    with ThreadPoolExecutor(max_workers=max(1, len(probes))) as ex:
+        for name, rec in ex.map(_probe_one, probes):
+            raw[name] = rec
+    probe_s = time.time() - t_probe
+    t_score = time.time()
 
     # Phase 2: per-shard intended set, derived empirically from the union of
     # what the shard's replicas hold (see metrics.py for why not routing).
@@ -158,9 +284,16 @@ def sample_once(probes, writer: RetainingWriter, queries: np.ndarray,
             union |= raw[n]["local"]
         intended_s = union & intended_all
 
-        live_obs = {n: raw[n]["obs"] for n in live}
+        # Truncated to k: agreement should compare the answer a client would
+        # receive, not the over-fetch tail requested for scoring.
+        live_obs = {n: [o[:k] for o in raw[n]["obs"]] for n in live}
         agreement = pairwise_agreement(live_obs, k) if len(live) >= 2 else float("nan")
         loo = leave_one_out_agreement(live_obs, k) if len(live) >= 3 else {}
+
+        # Hoisted out of the per-replica loop: the intended set is a
+        # property of the SHARD, so resolving it per replica repeated the
+        # same work once per replica per sample.
+        intended_rows = corpus.rows_for(intended_s)
 
         for n in names:
             r = raw[n]
@@ -178,7 +311,7 @@ def sample_once(probes, writer: RetainingWriter, queries: np.ndarray,
                 continue
 
             m = score_replica(queries, r["obs"], r["local"], intended_s,
-                              vector_of, k, metric)
+                              corpus, k, metric, intended_rows=intended_rows)
 
             def fmt(x: float) -> str:
                 return "" if np.isnan(x) else f"{x:.6f}"
@@ -195,6 +328,8 @@ def sample_once(probes, writer: RetainingWriter, queries: np.ndarray,
                 "loo_agreement": ("" if np.isnan(loo.get(n, float("nan")))
                                   else round(loo[n], 6)),
                 "n_confirmed_settled": len(intended_all),
+                "probe_s": round(probe_s, 3),
+                "score_s": round(time.time() - t_score, 3),
             })
     return rows
 
@@ -225,6 +360,12 @@ def main() -> int:
     ap.add_argument("--warmup-s", type=float, default=20.0,
                     help="write without chaos before fault injection starts")
     ap.add_argument("--metric", default="l2", choices=("l2", "ip"))
+    ap.add_argument("--dist", default="uniform", choices=("uniform", "lowdim"),
+                    help="vector distribution. 'uniform' is random 128-d, "
+                         "which suffers distance concentration and depresses "
+                         "recall for reasons unrelated to the index. 'lowdim' "
+                         "samples in a 12-d subspace and projects up, the "
+                         "regime real embeddings occupy.")
     ap.add_argument("--seed", type=int, default=20260808)
     ap.add_argument("--no-chaos", action="store_true",
                     help="baseline run: measure divergence with no faults")
@@ -259,8 +400,12 @@ def main() -> int:
 
     # Pinned query set -- identical at every sample and across runs, so
     # recall differences are attributable to the cluster, not the queries.
-    qrng = np.random.default_rng(args.seed)
-    queries = (qrng.random((args.queries, ch.VECTOR_DIM), dtype=np.float32) * 2.0 - 1.0)
+    # The writer owns the distribution, so it also mints the query set: a
+    # uniform query against a lowdim corpus would sit off the data manifold
+    # and measure nothing. Constructed here rather than after cluster startup
+    # purely so the queries can come from it; it touches no cluster state.
+    writer = RetainingWriter(ch.VECTOR_DIM, args.seed, dist=args.dist)
+    queries = writer.make_queries(args.queries)
 
     shutil.rmtree(ch.RUN_DIR, ignore_errors=True)
     ch.write_initial_configs()
@@ -296,7 +441,6 @@ def main() -> int:
     probes = probe_mod.build_probes(ch.NUM_SHARDS, ch.REPLICAS_PER_SHARD,
                                      ch.shard_port)
 
-    writer = RetainingWriter(ch.VECTOR_DIM, args.seed)
     stop_evt = threading.Event()
     rows: list[dict] = []
     sampler_errors: list[str] = []
@@ -437,6 +581,7 @@ def main() -> int:
         "settle_s": args.settle_s,
         "warmup_s": args.warmup_s,
         "metric": args.metric,
+        "dist": args.dist,
         "seed": args.seed,
         "chaos": not args.no_chaos,
         # Present only for quiesce runs; analyze.py keys the healing report
