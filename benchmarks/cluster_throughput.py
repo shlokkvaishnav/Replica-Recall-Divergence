@@ -120,37 +120,34 @@ class Bench:
         return out
 
 
-def main() -> int:
-    ap = argparse.ArgumentParser(description=__doc__,
-                                 formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--duration", type=int, default=30)
-    ap.add_argument("--warmup", type=int, default=10)
-    ap.add_argument("--writers", type=int, default=8)
-    ap.add_argument("--searches", type=int, default=300)
-    ap.add_argument("--k", type=int, default=10)
-    ap.add_argument("--consistency", default="strong", choices=("strong", "eventual"))
-    ap.add_argument("--seed", type=int, default=20260808)
-    ap.add_argument("--label", default="", help="tag recorded in the JSON output")
-    ap.add_argument("--json", default=None, help="write results here")
-    args = ap.parse_args()
+def run_once(args, rep: int) -> dict | None:
+    """One complete measurement: fresh cluster, warmup, measure, tear down.
 
-    if not os.path.exists(ch.SHARD_NODE_BIN) or not os.path.exists(ch.COORDINATOR_BIN):
-        print(f"ERROR: binaries not found. Build first.", file=sys.stderr)
-        return 1
-
+    The cluster is rebuilt for every repeat rather than reused. Measured
+    run-to-run spread on a 4-core WSL host was ~60% of the mean across
+    identical configurations, and that variance comes from process startup,
+    page cache and host scheduling -- reusing one cluster would hide exactly
+    the uncertainty this is trying to quantify.
+    """
     import shutil
     shutil.rmtree(ch.RUN_DIR, ignore_errors=True)
     ch.write_initial_configs()
     procs = ch.build_processes()
 
+    # None rather than an exit code: run_once is one repeat, and main()
+    # continues with the repeats that did succeed.
     for name in [n for n in procs if n.startswith("shard-")]:
         if not procs[name].start():
             print(f"FATAL: {name} failed to start")
-            return 1
+            for p in procs.values():
+                p.kill()
+            return None
     for name in [n for n in procs if n.startswith("coordinator-")]:
         if not procs[name].start():
             print(f"FATAL: {name} failed to start")
-            return 1
+            for p in procs.values():
+                p.kill()
+            return None
 
     node_ids = list(range(ch.NUM_COORDINATORS))
     if not ch.wait_for_coordinators_ready(node_ids) or \
@@ -158,9 +155,9 @@ def main() -> int:
         print("FATAL: cluster never became ready")
         for p in procs.values():
             p.kill()
-        return 1
+        return None
 
-    bench = Bench(ch.VECTOR_DIM, args.seed)
+    bench = Bench(ch.VECTOR_DIM, args.seed + rep)
     stop = threading.Event()
     record = threading.Event()
     threads = []
@@ -170,7 +167,7 @@ def main() -> int:
         t.start()
         threads.append(t)
 
-    print(f"[bench] warmup {args.warmup}s...")
+    print(f"[bench] rep {rep + 1}: warmup {args.warmup}s...")
     time.sleep(args.warmup)
 
     print(f"[bench] measuring inserts for {args.duration}s "
@@ -195,6 +192,7 @@ def main() -> int:
     total = ok + failed
     res = {
         "label": args.label,
+        "rep": rep,
         "writers": args.writers,
         "duration_s": round(elapsed, 3),
         "insert_ok": ok,
@@ -229,9 +227,104 @@ def main() -> int:
           f"{res['search_p95_ms']:.2f} / {res['search_p99_ms']:.2f} ms "
           f"(n={len(slat)})")
 
+    return res
+
+
+# ---------------------------------------------------------------------------
+# Aggregation
+# ---------------------------------------------------------------------------
+
+# Reported as median plus range, never as a single value. A point estimate of
+# cluster throughput on this class of host is not meaningful: three
+# consecutive runs of one unchanged build measured 377.5, 201.7 and 305.5
+# inserts/s -- a range of 60% of the mean. Quoting any one of those implies a
+# precision the measurement does not have, and comparing two builds on one
+# sample each is how an apparent 48% regression showed up here that turned out
+# to be nothing.
+AGG_KEYS = [
+    ("insert_per_s", "inserts/s", 1),
+    ("insert_p50_ms", "insert p50 (ms)", 2),
+    ("insert_p99_ms", "insert p99 (ms)", 2),
+    ("search_p50_ms", "search p50 (ms)", 2),
+    ("search_p99_ms", "search p99 (ms)", 2),
+]
+
+
+def summarize(runs: list[dict]) -> dict:
+    out = {}
+    for key, _, _ in AGG_KEYS:
+        vals = [r[key] for r in runs if r.get(key) is not None]
+        if not vals:
+            continue
+        out[key] = {
+            "median": round(statistics.median(vals), 3),
+            "min": round(min(vals), 3),
+            "max": round(max(vals), 3),
+            "values": [round(v, 3) for v in vals],
+        }
+    return out
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser(description=__doc__,
+                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--duration", type=int, default=30)
+    ap.add_argument("--warmup", type=int, default=10)
+    ap.add_argument("--writers", type=int, default=8)
+    ap.add_argument("--searches", type=int, default=300)
+    ap.add_argument("--k", type=int, default=10)
+    ap.add_argument("--consistency", default="strong", choices=("strong", "eventual"))
+    ap.add_argument("--seed", type=int, default=20260808)
+    ap.add_argument("--label", default="", help="tag recorded in the JSON output")
+    ap.add_argument("--repeat", type=int, default=1,
+                    help="independent measurements, each with a fresh cluster. "
+                         "Reported as median and range. Fewer than 3 cannot "
+                         "show the spread and should not be quoted.")
+    ap.add_argument("--json", default=None, help="write results here")
+    args = ap.parse_args()
+
+    if not os.path.exists(ch.SHARD_NODE_BIN) or not os.path.exists(ch.COORDINATOR_BIN):
+        print("ERROR: binaries not found. Build first.", file=sys.stderr)
+        return 1
+
+    runs = []
+    for rep in range(max(1, args.repeat)):
+        r = run_once(args, rep)
+        if r is None:
+            print(f"[bench] rep {rep + 1} failed; continuing", file=sys.stderr)
+            continue
+        runs.append(r)
+
+    if not runs:
+        print("ERROR: every repeat failed", file=sys.stderr)
+        return 1
+
+    agg = summarize(runs)
+    print()
+    print("=" * 68)
+    print(f"  {len(runs)} run(s)" + (f"   [{args.label}]" if args.label else ""))
+    print("=" * 68)
+    print(f"  {'metric':<18} {'median':>10} {'min':>10} {'max':>10}   values")
+    print("  " + "-" * 64)
+    for key, label, nd in AGG_KEYS:
+        if key not in agg:
+            continue
+        a = agg[key]
+        vals = " ".join(f"{v:.{nd}f}" for v in a["values"])
+        print(f"  {label:<18} {a['median']:>10.{nd}f} {a['min']:>10.{nd}f} "
+              f"{a['max']:>10.{nd}f}   {vals}")
+
+    if len(runs) < 3:
+        print()
+        print("  WARNING: fewer than 3 repeats. This host has shown a ~60% range")
+        print("  across identical configurations, so one measurement carries no")
+        print("  useful precision. Use --repeat 5 before quoting a number.")
+
     if args.json:
+        payload = {"label": args.label, "repeats": len(runs),
+                   "summary": agg, "runs": runs}
         with open(args.json, "w") as f:
-            json.dump(res, f, indent=2)
+            json.dump(payload, f, indent=2)
         print(f"\n[bench] wrote {args.json}")
     return 0
 
