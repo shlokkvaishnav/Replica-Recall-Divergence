@@ -34,6 +34,7 @@ import shutil
 import sys
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 
 import numpy as np
 
@@ -44,7 +45,7 @@ sys.path.insert(0, ROOT)
 
 import chaos_harness as ch                                        # noqa: E402
 from metrics import (                                             # noqa: E402
-    score_replica, pairwise_agreement, leave_one_out_agreement,
+    Corpus, score_replica, pairwise_agreement, leave_one_out_agreement,
 )
 import probe as probe_mod                                         # noqa: E402
 
@@ -73,6 +74,11 @@ class RetainingWriter:
         self.attempted = 0
         self.failed = 0
         self._next = 0
+        # Contiguous corpus backing exact ground truth; see _append_corpus.
+        self._corpus_ids: list[str] = []
+        self._corpus_mat = np.empty((0, dim), dtype=np.float32)
+        self._corpus_row: dict[str, int] = {}
+        self._corpus_n = 0
         self._seed = seed
         self._dist = dist
         self._intrinsic = intrinsic_dim
@@ -141,6 +147,7 @@ class RetainingWriter:
                     with self.lock:
                         self.vector_of[vid] = vec
                         self.confirmed_at[vid] = time.time()
+                        self._append_corpus(vid, vec)
                 else:
                     with self.lock:
                         self.failed += 1
@@ -179,6 +186,35 @@ class RetainingWriter:
         with self.lock:
             return {i for i, t in self.confirmed_at.items() if t <= cutoff}
 
+    def _append_corpus(self, vid: str, vec: np.ndarray) -> None:
+        """Append to the contiguous corpus. Caller holds self.lock.
+
+        Geometric growth, so the amortised cost of an append is O(1). Growing
+        by a fixed increment would make building an N-vector corpus O(N^2) in
+        copying -- the same amortised-analysis point as the mmap resize in
+        the C++ storage layer, which grows by a flat 10 MB.
+        """
+        if self._corpus_n == len(self._corpus_mat):
+            new_cap = max(1024, len(self._corpus_mat) * 2)
+            grown = np.empty((new_cap, self.dim), dtype=np.float32)
+            grown[:self._corpus_n] = self._corpus_mat[:self._corpus_n]
+            self._corpus_mat = grown
+        self._corpus_mat[self._corpus_n] = vec
+        self._corpus_row[vid] = self._corpus_n
+        self._corpus_ids.append(vid)
+        self._corpus_n += 1
+
+    def snapshot_corpus(self) -> Corpus:
+        """O(1) snapshot: capture the row count and the current array.
+
+        Safe without copying because ids are only ever appended. Rows below
+        `n` never move, and if a later append reallocates, this reader keeps
+        the old array -- which still holds the first `n` rows correctly.
+        """
+        with self.lock:
+            return Corpus(self._corpus_ids, self._corpus_mat,
+                          self._corpus_row, self._corpus_n)
+
     def snapshot_vectors(self) -> dict[str, np.ndarray]:
         with self.lock:
             return dict(self.vector_of)
@@ -193,7 +229,7 @@ def sample_once(probes, writer: RetainingWriter, queries: np.ndarray,
     """One full sweep over every replica. Returns a list of row dicts."""
     t = time.time()
     intended_all = writer.intended_set(settle_s)
-    vector_of = writer.snapshot_vectors()
+    corpus = writer.snapshot_corpus()
 
     # Phase 1: collect raw observations from every replica.
     # Over-fetch. score_replica must drop results that fall outside the
@@ -202,17 +238,37 @@ def sample_once(probes, writer: RetainingWriter, queries: np.ndarray,
     # e2e_recall. 3k leaves ample headroom at realistic write rates.
     k_fetch = k * 3
 
-    raw: dict[str, dict] = {}
-    for p in probes:
+    # Probe every replica CONCURRENTLY.
+    #
+    # This is a correctness fix as much as a speed one. Probing serially
+    # meant 100 round trips per replica, one after another, so the last
+    # replica was measured seconds after the first -- while writes continued
+    # the whole time. Q1 asks whether replicas disagree "at the same
+    # instant", and that claim was only true to within the width of the
+    # sweep. Issuing them together collapses that window to roughly one
+    # replica's probe time.
+    #
+    # Threads rather than processes because these are gRPC round trips: the
+    # GIL is released during the wait, and each ReplicaProbe owns its own
+    # channel and is touched by exactly one worker.
+    def _probe_one(p):
         ok_ids, local = p.list_local_ids()
         ok_search, obs = (p.search_batch(queries, k_fetch) if ok_ids
                           else (False, []))
-        raw[p.name] = {
+        return p.name, {
             "probe": p,
             "reachable": bool(ok_ids and ok_search),
             "local": local,
             "obs": obs,
         }
+
+    t_probe = time.time()
+    raw: dict[str, dict] = {}
+    with ThreadPoolExecutor(max_workers=max(1, len(probes))) as ex:
+        for name, rec in ex.map(_probe_one, probes):
+            raw[name] = rec
+    probe_s = time.time() - t_probe
+    t_score = time.time()
 
     # Phase 2: per-shard intended set, derived empirically from the union of
     # what the shard's replicas hold (see metrics.py for why not routing).
@@ -234,6 +290,11 @@ def sample_once(probes, writer: RetainingWriter, queries: np.ndarray,
         agreement = pairwise_agreement(live_obs, k) if len(live) >= 2 else float("nan")
         loo = leave_one_out_agreement(live_obs, k) if len(live) >= 3 else {}
 
+        # Hoisted out of the per-replica loop: the intended set is a
+        # property of the SHARD, so resolving it per replica repeated the
+        # same work once per replica per sample.
+        intended_rows = corpus.rows_for(intended_s)
+
         for n in names:
             r = raw[n]
             p = r["probe"]
@@ -250,7 +311,7 @@ def sample_once(probes, writer: RetainingWriter, queries: np.ndarray,
                 continue
 
             m = score_replica(queries, r["obs"], r["local"], intended_s,
-                              vector_of, k, metric)
+                              corpus, k, metric, intended_rows=intended_rows)
 
             def fmt(x: float) -> str:
                 return "" if np.isnan(x) else f"{x:.6f}"
@@ -267,6 +328,8 @@ def sample_once(probes, writer: RetainingWriter, queries: np.ndarray,
                 "loo_agreement": ("" if np.isnan(loo.get(n, float("nan")))
                                   else round(loo[n], 6)),
                 "n_confirmed_settled": len(intended_all),
+                "probe_s": round(probe_s, 3),
+                "score_s": round(time.time() - t_score, 3),
             })
     return rows
 
