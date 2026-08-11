@@ -190,8 +190,40 @@ def _intra_shard_spreads(rows) -> tuple[list[float], list[float], list[float]]:
     return spreads, mins, maxes
 
 
-def _detection_stats(rows) -> dict | None:
-    """Q4's numbers as data rather than print output."""
+def resolution_eps(meta) -> float:
+    """Smallest recall difference this measurement can represent.
+
+    Mean recall@k over nq queries moves in steps of 1/(k*nq): one query
+    gaining or losing one correct neighbour. A gap below that is not a small
+    difference, it is no difference -- the replicas returned identical result
+    sets and the arithmetic is showing float noise. Half a step is used as
+    the tie threshold.
+
+    Derived from the run's own parameters rather than chosen, so it cannot be
+    tuned to make a result appear.
+    """
+    try:
+        k = int(meta.get("k") or 10)
+        nq = int(meta.get("queries") or 100)
+        return 0.5 / float(k * nq)
+    except Exception:
+        return 0.0005
+
+
+def _detection_stats(rows, tie_eps: float = 0.0) -> dict | None:
+    """Q4's numbers as data rather than print output.
+
+    Groups where the worst and second-worst replica are within `tie_eps` are
+    excluded, not scored. When every replica performs identically there is no
+    degraded replica to find, so "did the detector pick the worst one" has no
+    correct answer -- and min() over tied values silently returns whichever
+    comes first in list order, identically for both the detector and the
+    truth, manufacturing a hit.
+
+    That artifact is not hypothetical: on realistic data the healthy baseline
+    scored 0.6409 against a chance of 0.333, purely from ties, with a rank
+    correlation standard deviation of 0.86.
+    """
     groups: dict[tuple[str, str], list[tuple[str, float, float]]] = {}
     for r in rows:
         if r["reachable"] != "1":
@@ -202,12 +234,30 @@ def _detection_stats(rows) -> dict | None:
         groups.setdefault((r["t_rel"], r["shard"]), []).append(
             (r["name"], loo, e2e))
 
-    usable = [g for g in groups.values() if len(g) >= 3]
-    if len(usable) < 5:
-        return None
+    candidates = [g for g in groups.values() if len(g) >= 3]
+
+    scored, tied = [], 0
+    for g in candidates:
+        srt = sorted(x[2] for x in g)
+        if (srt[1] - srt[0]) <= tie_eps:
+            tied += 1
+            continue
+        scored.append(g)
+
+    if len(scored) < 5:
+        return {
+            "groups": len(scored),
+            "tied_excluded": tied,
+            "candidates": len(candidates),
+            "n_replicas": float("nan"),
+            "hit_rate": float("nan"),
+            "chance": float("nan"),
+            "rank_corr": float("nan"),
+            "margin": float("nan"),
+        } if candidates else None
 
     hits, spearmans, margins = 0, [], []
-    for g in usable:
+    for g in scored:
         if min(g, key=lambda x: x[1])[0] == min(g, key=lambda x: x[2])[0]:
             hits += 1
         loo_v = np.asarray([x[1] for x in g])
@@ -218,21 +268,23 @@ def _detection_stats(rows) -> dict | None:
         srt = sorted(x[2] for x in g)
         margins.append(srt[1] - srt[0])
 
-    n_rep = float(np.mean([len(g) for g in usable]))
+    n_rep = float(np.mean([len(g) for g in scored]))
     return {
-        "groups": len(usable),
+        "groups": len(scored),
+        "tied_excluded": tied,
+        "candidates": len(candidates),
         "n_replicas": n_rep,
-        "hit_rate": hits / len(usable),
+        "hit_rate": hits / len(scored),
         "chance": 1.0 / n_rep,
         "rank_corr": float(np.mean(spearmans)) if spearmans else float("nan"),
         "margin": float(np.mean(margins)),
     }
 
 
-def summarize_run(rows) -> dict:
+def summarize_run(rows, meta=None) -> dict:
     """One row of numbers per experiment run, for cross-seed aggregation."""
     spreads, _, _ = _intra_shard_spreads(rows)
-    det = _detection_stats(rows) or {}
+    det = _detection_stats(rows, resolution_eps(meta or {})) or {}
 
     idx, comp, e2e = [], [], []
     for r in rows:
@@ -260,6 +312,8 @@ def summarize_run(rows) -> dict:
         "rank_corr": det.get("rank_corr", float("nan")),
         "margin": det.get("margin", float("nan")),
         "chance": det.get("chance", float("nan")),
+        "tied_excluded": det.get("tied_excluded", 0),
+        "detector_groups": det.get("groups", 0),
         "unreachable_frac": unreach / total if total else float("nan"),
         "by_size": _recall_by_size(rows),
     }
@@ -568,7 +622,7 @@ def q0_drift(rows) -> None:
         print("  against this drift before claiming a failure effect.")
 
 
-def q4_can_we_spot_the_bad_replica(rows) -> None:
+def q4_can_we_spot_the_bad_replica(rows, meta=None) -> None:
     """The detection question, asked properly.
 
     The previous version correlated shard-level agreement against shard-level
@@ -584,7 +638,7 @@ def q4_can_we_spot_the_bad_replica(rows) -> None:
     print("Q4  Can cross-replica comparison identify the degraded replica?")
     print("=" * 72)
 
-    det = _detection_stats(rows)
+    det = _detection_stats(rows, resolution_eps(meta or {}))
     if det is None:
         print("  fewer than 5 groups with >=3 scored replicas.")
         print("  (loo_agreement needs 3+ reachable replicas in a shard; with")
@@ -594,7 +648,16 @@ def q4_can_we_spot_the_bad_replica(rows) -> None:
 
     rate, chance, n_rep = det["hit_rate"], det["chance"], det["n_replicas"]
 
-    print(f"  groups scored           : {det['groups']}")
+    if np.isnan(det.get("hit_rate", float("nan"))):
+        print(f"  {det.get('candidates', 0)} candidate groups, "
+              f"{det.get('tied_excluded', 0)} excluded as ties, "
+              f"{det.get('groups', 0)} scorable.")
+        print("  Too few groups where any replica is actually distinguishable")
+        print("  to say anything about detection.")
+        return
+    print(f"  groups scored           : {det['groups']}"
+          f"   ({det.get('tied_excluded', 0)} excluded as ties of "
+          f"{det.get('candidates', 0)} candidates)")
     print(f"  mean replicas per group : {n_rep:.1f}")
     print(f"  worst-replica hit rate  : {fmt(rate)}   (chance {fmt(chance)})")
     print(f"  lift over chance        : {fmt(rate / chance, 2)}x")
@@ -657,7 +720,7 @@ def main() -> int:
     q1_intra_shard_spread(rows)
     q2_recall_around_failover(rows, events)
     q3_graph_vs_data(rows)
-    q4_can_we_spot_the_bad_replica(rows)
+    q4_can_we_spot_the_bad_replica(rows, meta)
     print()
     return 0
 

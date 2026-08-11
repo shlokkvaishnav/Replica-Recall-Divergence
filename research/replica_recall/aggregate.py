@@ -97,7 +97,7 @@ def discover(sweep_dir: str) -> dict[str, list[tuple[int, dict]]]:
             print(f"  (skipping {name}: no samples.csv)")
             continue
         rows, _, meta = load(path)
-        s = summarize_run(rows)
+        s = summarize_run(rows, meta)
         s["heal"] = heal_stats(rows, meta)
         out[m.group(2)].append((int(m.group(1)), s))
     return out
