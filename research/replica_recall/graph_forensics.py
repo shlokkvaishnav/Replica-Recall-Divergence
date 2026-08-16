@@ -83,15 +83,24 @@ def load_index(path: str):
     all_nodes = raw[HEADER_SIZE:HEADER_SIZE + capacity * NODE_DTYPE.itemsize] \
         .view(NODE_DTYPE)
 
-    # element_count is the LIVE count and delete_vector() decrements it, so it
-    # is not the array extent. This experiment never deletes, but trusting it
-    # blindly is how the visited-bitmap bug happened. Find the extent by
-    # scanning instead: the file is pre-allocated and zero-filled, and a real
-    # node always has a nonzero max_layer or at least one neighbour, so the
-    # last written node is the last row that is not entirely zero.
-    n = int(header["element_count"])
-    n = min(n, capacity)
-    return header, all_nodes[:n], capacity
+    # Do NOT use element_count as the extent. add_vector writes the node at
+    # hnsw.hpp:120 and only increments element_count at :207, *after* the
+    # linking pass -- so a process killed mid-insert leaves a node fully
+    # written to disk that the counter never acknowledges. Those nodes are
+    # precisely the damage being looked for, and taking element_count as the
+    # extent would exclude the entire population from the analysis.
+    #
+    # Scan for the real extent instead. The file is pre-allocated zero-filled,
+    # and a written node has its unused neighbour slots memset to -1
+    # (0xFFFFFFFF) by the Node constructor, so "any slot holds the fill value"
+    # separates written rows from untouched ones. Layers above max_layer are
+    # entirely fill, and most nodes live only on layer 0, so this is decisive.
+    written = (all_nodes["neighbors"] == NO_NEIGHBOR).any(axis=(1, 2))
+    written |= (all_nodes["vector"] != 0).any(axis=1)
+    nz = np.flatnonzero(written)
+    extent = int(nz[-1]) + 1 if nz.size else 0
+
+    return header, all_nodes[:extent], capacity
 
 
 def analyse(path: str) -> dict:
@@ -106,6 +115,10 @@ def analyse(path: str) -> dict:
         "entry_point_id": entry,
         "header_max_layer": int(header["max_layer"]),
         "nodes_examined": n,
+        # Nodes written to disk that element_count never acknowledged. The node
+        # body is persisted before the counter is bumped, so a kill in that
+        # window leaves exactly this: real data the index does not know it has.
+        "uncounted_nodes": n - int(header["element_count"]),
     }
     if n == 0:
         return out
@@ -217,7 +230,9 @@ def analyse(path: str) -> dict:
 
 
 FIELDS = [
-    ("nodes_examined", "nodes", "{:,}"),
+    ("nodes_examined", "nodes written", "{:,}"),
+    ("element_count", "element_count (header)", "{:,}"),
+    ("uncounted_nodes", "written but uncounted", "{:,}"),
     ("in_degree_0", "in-degree 0 (invisible)", "{:,}"),
     ("in_degree_0_frac", "  as fraction", "{:.4%}"),
     ("unreachable_from_entry", "unreachable from entry", "{:,}"),
