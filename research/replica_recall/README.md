@@ -122,6 +122,81 @@ in a healthy cluster: HNSW insertion order differs per replica, so the graphs
 are genuinely different. Without the no-chaos noise floor you cannot claim any
 observed divergence was caused by failure.
 
+### Choosing a corpus (`--dist`)
+
+This matters more than any other flag. It decides whether the recall numbers
+mean anything at all, and it is recorded in `run_meta.json` and printed by
+`analyze.py` so a result can never be quoted against the wrong corpus.
+
+| `--dist` | what it is | when to use it |
+|---|---|---|
+| `uniform` | random 128-d vectors in [-1, 1] | **the trap.** See below |
+| `lowdim` | sampled in a 12-d subspace, projected to 128-d | fast, no download, roughly the regime real embeddings occupy |
+| `sift` | the real SIFT1M dataset | **the one to report.** No dependence on a generator written for this project |
+
+`uniform` suffers distance concentration: in 128 uniform dimensions the nearest
+and farthest neighbours of a query are almost equidistant, so the true top-k is
+close to arbitrary and recall falls with N for reasons that have nothing to do
+with the index. Measured here, the noise it introduces was about **5× the
+effect being studied** — `index_recall` showed no separation between baseline
+and chaos on `uniform` (p = 0.31) while separating cleanly on realistic vectors
+(p = 0.0079). A benchmark built on uniform random vectors would have concluded
+there was nothing to find.
+
+`sift` downloads on first use — a byte-range request for just the prefix it
+needs, ~103 MB rather than the full 516 MB — and caches under
+`research/replica_recall/data/` (already gitignored). Pre-warm it so the
+download is not sitting inside a timed run:
+
+```bash
+python research/replica_recall/sift.py --vectors 200000
+```
+
+Each seed walks its own permutation of the loaded pool and samples its own
+queries from SIFT's held-out query set, so the seed still resamples the whole
+experiment rather than only the kill schedule. Values are scaled by 1/128 on
+load: a power of two, so the mantissa is untouched and the ranking is provably
+unchanged, but the magnitudes stay well inside float32. Distances are therefore
+smaller than published SIFT distances by 128², and ranks are unaffected.
+
+One sweep directory per distribution — run names carry only seed and condition,
+so `aggregate.py` would otherwise pool two corpora into one meaningless number.
+It refuses to, but give it separate directories anyway:
+
+```bash
+python research/replica_recall/sweep.py --seeds 5 --out-dir results_sweep_sift --dist sift
+python research/replica_recall/aggregate.py --sweep-dir research/replica_recall/results_sweep_sift
+```
+
+### Asking what the damage *is* (graph forensics)
+
+The experiment above establishes *that* failure degrades `index_recall` with
+the data held constant. `graph_forensics.py` asks what the damage actually is,
+by reading a replica's `index.ndb` directly — it is a dense array of 1056-byte
+nodes behind a 64-byte header, so a damaged replica can be dissected offline
+with no cluster running.
+
+```bash
+# one shard, or every replica side by side
+python research/replica_recall/graph_forensics.py chaos_run/data --compare --link-quality 2000
+
+# matched baseline and chaos runs, torn down before each is read
+python research/replica_recall/forensics_experiment.py --seeds 3 --dist sift
+```
+
+Two things to know before trusting the output:
+
+- **Never read a live cluster.** `element_count` lags the node bodies and links
+  point at nodes not yet flushed; both look exactly like corruption. Use
+  `forensics_experiment.py`, which tears each run down first.
+- **`link_quality` is the semantic metric, and only differences are
+  meaningful.** It scores a node's stored neighbours against the exact nearest
+  neighbours among the vectors *that replica actually holds*, so it isolates
+  graph quality from data completeness the way `index_recall` does. It will not
+  reach 1.0 even on a healthy index — Algorithm 4's heuristic deliberately keeps
+  some far neighbours for navigability — so compare replicas, never the
+  absolute number.
+
 ## The healing test (the decisive one)
 
 A run with faults throughout measures a **steady state**: ongoing damage
@@ -255,11 +330,14 @@ experiment produces is uninterpretable.
 |---|---|
 | `metrics.py` | measurement core — pure functions, no I/O |
 | `test_metrics.py` | offline validation, no cluster needed |
+| `sift.py` | SIFT1M loader — byte-range fetch, fvecs parser, 1/128 scaling |
 | `probe.py` | direct per-replica gRPC client |
 | `run_experiment.py` | orchestration; reuses `chaos_harness.py` for process management and fault injection |
 | `analyze.py` | Q0/QS/Q1–Q4 for a single run |
 | `sweep.py` | runs both conditions across several seeds |
 | `aggregate.py` | baseline vs chaos across seeds, with an exact rank test |
+| `graph_forensics.py` | reads `index.ndb` directly — degree, reachability, in-degree, link quality |
+| `forensics_experiment.py` | matched baseline/chaos runs, each dissected after teardown |
 
 ## Interpreting the output
 
