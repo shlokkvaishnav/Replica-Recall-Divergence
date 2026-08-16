@@ -88,6 +88,7 @@ def discover(sweep_dir: str) -> dict[str, list[tuple[int, dict]]]:
 
     out: dict[str, list[tuple[int, dict]]] = {
         "baseline": [], "chaos": [], "quiesce": []}
+    dists: dict[str, list[str]] = {}
     for name in sorted(os.listdir(sweep_dir)):
         m = RUN_RE.match(name)
         if not m:
@@ -97,9 +98,31 @@ def discover(sweep_dir: str) -> dict[str, list[tuple[int, dict]]]:
             print(f"  (skipping {name}: no samples.csv)")
             continue
         rows, _, meta = load(path)
+        dists.setdefault(meta.get("dist", "unknown"), []).append(name)
         s = summarize_run(rows, meta)
         s["heal"] = heal_stats(rows, meta)
         out[m.group(2)].append((int(m.group(1)), s))
+
+    # Run directories are named seed<N>_<condition> and carry no distribution,
+    # so a uniform run and a SIFT run dropped in the same directory would be
+    # averaged together without a word. The two are not comparable -- uniform
+    # 128-d suffers distance concentration -- so pooling them produces a
+    # number that describes nothing. Refuse rather than average.
+    if len(dists) > 1:
+        print(f"ERROR: {sweep_dir} mixes corpus distributions; refusing to "
+              f"aggregate across them.", file=sys.stderr)
+        for d, names in sorted(dists.items()):
+            print(f"  {d:<10} {len(names)} runs: "
+                  f"{', '.join(names[:4])}{' ...' if len(names) > 4 else ''}",
+                  file=sys.stderr)
+        print("Use one --out-dir per distribution (see sweep.py --out-dir).",
+              file=sys.stderr)
+        sys.exit(1)
+
+    if dists:
+        d = next(iter(dists))
+        print(f"  corpus distribution: {d} "
+              f"({sum(len(v) for v in out.values())} runs)")
     return out
 
 

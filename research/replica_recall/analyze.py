@@ -704,6 +704,18 @@ def main() -> int:
               f"{meta.get('replicas_per_shard')} replicas   "
               f"confirmed={meta.get('confirmed_total')}  "
               f"seed={meta.get('seed')}")
+        # The corpus distribution decides what recall numbers can mean at all
+        # -- uniform 128-d suffers distance concentration and depresses recall
+        # for reasons unrelated to the index. It was recorded in run_meta.json
+        # and never printed, which made a uniform report and a SIFT report
+        # indistinguishable on the page. That is how a number gets quoted
+        # against the wrong corpus.
+        print(f"  corpus={meta.get('dist', 'unknown')}  "
+              f"metric={meta.get('metric')}")
+        if meta.get("corpus_exhausted"):
+            print("  WARNING: the corpus pool ran out and writers stopped "
+                  "early; the write rate fell for reasons unrelated to the "
+                  "cluster.")
     print(f"  rows={len(rows)}  chaos_events={len(events)}")
 
     unreachable = sum(1 for r in rows if r["reachable"] != "1")

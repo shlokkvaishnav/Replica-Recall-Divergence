@@ -48,6 +48,7 @@ from metrics import (                                             # noqa: E402
     Corpus, score_replica, pairwise_agreement, leave_one_out_agreement,
 )
 import probe as probe_mod                                         # noqa: E402
+import sift                                                       # noqa: E402
 
 
 RESULTS_DIR = os.path.join(HERE, "results")
@@ -66,7 +67,8 @@ class RetainingWriter:
     """
 
     def __init__(self, dim: int, seed: int, dist: str = "uniform",
-                 intrinsic_dim: int = 12, noise: float = 0.02):
+                 intrinsic_dim: int = 12, noise: float = 0.02,
+                 sift_dir: str | None = None, sift_vectors: int = 200_000):
         self.dim = dim
         self.lock = threading.Lock()
         self.vector_of: dict[str, np.ndarray] = {}
@@ -93,6 +95,17 @@ class RetainingWriter:
         self._tls = threading.local()
         self._thread_counter = 0
 
+        # --dist sift only. The corpus is a fixed file, so the seed can no
+        # longer regenerate it -- and if it only varied the queries and the
+        # kill schedule, the seed sweep would quietly stop replicating the
+        # thing it claims to replicate. Each seed therefore walks its own
+        # permutation of the loaded pool, so it draws a genuinely different
+        # corpus out of the same real distribution.
+        self._sift_base: np.ndarray | None = None
+        self._sift_queries: np.ndarray | None = None
+        self._sift_order: np.ndarray | None = None
+        self.exhausted = False
+
         if dist == "lowdim":
             # Sample in a low-dimensional subspace and project up. Uniform
             # random points in 128-d suffer distance concentration -- nearest
@@ -104,6 +117,13 @@ class RetainingWriter:
             proj_rng = np.random.default_rng([seed, 0xC0FFEE])
             self._proj = proj_rng.standard_normal(
                 (intrinsic_dim, dim)).astype(np.float32)
+        elif dist == "sift":
+            self._proj = None
+            base, queries = sift.load(sift_dir, n_base=sift_vectors, dim=dim)
+            self._sift_base = base
+            self._sift_queries = queries
+            self._sift_order = np.random.default_rng(
+                [seed, 0x51F7]).permutation(len(base))
         elif dist == "uniform":
             self._proj = None
         else:
@@ -119,10 +139,27 @@ class RetainingWriter:
             self._tls.rng = r
         return r
 
-    def _make(self) -> tuple[str, np.ndarray]:
+    def _make(self) -> tuple[str, np.ndarray] | None:
+        """Next (id, vector), or None once a finite corpus is used up."""
         with self.lock:
-            vid = f"rr-{self._next}"
+            idx = self._next
+            vid = f"rr-{idx}"
             self._next += 1
+
+        if self._sift_base is not None:
+            # Exhaustion stops the writer; it does not wrap. Wrapping would
+            # insert the same vector under two ids, manufacturing exact ties
+            # that corrupt ground-truth ranking and break the Corpus id<->row
+            # invariant. 200k vectors against ~35k confirmed in a 300s run is
+            # ~6x headroom, so this should never fire -- it exists so that if
+            # it ever does, the run says so instead of quietly changing what
+            # it measures.
+            if idx >= len(self._sift_order):
+                with self.lock:
+                    self.exhausted = True
+                return None
+            return vid, self._sift_base[self._sift_order[idx]]
+
         rng = self._rng()
         if self._proj is None:
             vec = rng.random(self.dim, dtype=np.float32) * 2.0 - 1.0
@@ -134,7 +171,12 @@ class RetainingWriter:
 
     def loop(self, stop_evt: threading.Event, node_ids: list[int]) -> None:
         while not stop_evt.is_set():
-            vid, vec = self._make()
+            made = self._make()
+            if made is None:
+                print("[writer] corpus pool exhausted -- stopping this writer. "
+                      "Raise --sift-vectors.", flush=True)
+                return
+            vid, vec = made
             with self.lock:
                 self.attempted += 1
             try:
@@ -167,6 +209,17 @@ class RetainingWriter:
         runs without consuming from any writer's stream.
         """
         qrng = np.random.default_rng([self._seed, 0xDEC0DE])
+        if self._sift_queries is not None:
+            # SIFT ships its own held-out query set, disjoint from the base
+            # vectors. Using it rather than sampling the base is the point:
+            # querying with vectors that are themselves in the corpus makes
+            # every query its own trivial nearest neighbour.
+            pool = self._sift_queries
+            if n > len(pool):
+                raise ValueError(
+                    f"--queries {n} exceeds the {len(pool)} SIFT query vectors")
+            pick = qrng.choice(len(pool), size=n, replace=False)
+            return np.ascontiguousarray(pool[np.sort(pick)])
         if self._proj is None:
             return qrng.random((n, self.dim), dtype=np.float32) * 2.0 - 1.0
         z = qrng.standard_normal((n, self._intrinsic)).astype(np.float32)
@@ -360,12 +413,25 @@ def main() -> int:
     ap.add_argument("--warmup-s", type=float, default=20.0,
                     help="write without chaos before fault injection starts")
     ap.add_argument("--metric", default="l2", choices=("l2", "ip"))
-    ap.add_argument("--dist", default="uniform", choices=("uniform", "lowdim"),
+    ap.add_argument("--dist", default="uniform",
+                    choices=("uniform", "lowdim", "sift"),
                     help="vector distribution. 'uniform' is random 128-d, "
                          "which suffers distance concentration and depresses "
                          "recall for reasons unrelated to the index. 'lowdim' "
                          "samples in a 12-d subspace and projects up, the "
-                         "regime real embeddings occupy.")
+                         "regime real embeddings occupy. 'sift' is the real "
+                         "SIFT1M dataset -- 128-d, matching VECTOR_DIM -- and "
+                         "is the only option whose result does not depend on a "
+                         "generator written for this project.")
+    ap.add_argument("--sift-dir", default=None,
+                    help="--dist sift only: cache directory for the fvecs "
+                         "files (default research/replica_recall/data, "
+                         "override with NANODB_SIFT_DIR)")
+    ap.add_argument("--sift-vectors", type=int, default=200_000,
+                    help="--dist sift only: how many SIFT base vectors to "
+                         "load (default 200000, ~103 MB). Each seed draws its "
+                         "corpus as a permutation of these, so a larger pool "
+                         "means less overlap between seeds.")
     ap.add_argument("--seed", type=int, default=20260808)
     ap.add_argument("--no-chaos", action="store_true",
                     help="baseline run: measure divergence with no faults")
@@ -404,7 +470,9 @@ def main() -> int:
     # uniform query against a lowdim corpus would sit off the data manifold
     # and measure nothing. Constructed here rather than after cluster startup
     # purely so the queries can come from it; it touches no cluster state.
-    writer = RetainingWriter(ch.VECTOR_DIM, args.seed, dist=args.dist)
+    writer = RetainingWriter(ch.VECTOR_DIM, args.seed, dist=args.dist,
+                             sift_dir=args.sift_dir,
+                             sift_vectors=args.sift_vectors)
     queries = writer.make_queries(args.queries)
 
     shutil.rmtree(ch.RUN_DIR, ignore_errors=True)
@@ -582,6 +650,10 @@ def main() -> int:
         "warmup_s": args.warmup_s,
         "metric": args.metric,
         "dist": args.dist,
+        "sift_vectors": args.sift_vectors if args.dist == "sift" else None,
+        # True means the writer ran out of corpus and stopped early, so the
+        # write rate fell for a reason that has nothing to do with the cluster.
+        "corpus_exhausted": writer.exhausted,
         "seed": args.seed,
         "chaos": not args.no_chaos,
         # Present only for quiesce runs; analyze.py keys the healing report

@@ -20,6 +20,7 @@ from metrics import (                                   # noqa: E402
     Corpus, exact_topk, exact_topk_rows, recall_at_k, set_completeness,
     pairwise_agreement, leave_one_out_agreement, score_replica,
 )
+import sift                                             # noqa: E402
 
 
 RNG = np.random.default_rng(20260808)
@@ -284,6 +285,94 @@ def test_agreement_tracks_divergence():
     check("agreement falls as one replica loses more data", monotone)
 
 
+# ---------------------------------------------------------------------------
+# SIFT loader. These run without touching the network or the filesystem: the
+# fvecs parser accepts a bytes buffer, so the tests synthesise their own.
+# ---------------------------------------------------------------------------
+
+def _fvecs_bytes(vecs: np.ndarray, dim_header: int | None = None) -> bytes:
+    """Encode an (n, dim) float32 array as fvecs. dim_header overrides the
+    declared dimension, so a test can forge a corrupt record."""
+    n, dim = vecs.shape
+    hdr = np.full((n, 1), dim if dim_header is None else dim_header,
+                  dtype=np.int32)
+    return np.hstack([hdr.view(np.float32), vecs.astype(np.float32)]).tobytes()
+
+
+def test_fvecs_roundtrip():
+    print("\ntest_fvecs_roundtrip")
+    dim = 8
+    vecs = RNG.integers(0, 256, size=(6, dim)).astype(np.float32)
+    buf = _fvecs_bytes(vecs)
+
+    check("record stride is 4 + 4*dim", len(buf) == 6 * (4 + 4 * dim),
+          f"{len(buf)}")
+
+    got = sift.read_fvecs(buf, dim=dim)
+    check("shape survives the round trip", got.shape == (6, dim), str(got.shape))
+    check("dtype is float32", got.dtype == np.float32, str(got.dtype))
+    check("values are bit-identical", bool((got == vecs).all()))
+
+    # limit must read a prefix, not a sample.
+    head = sift.read_fvecs(buf, limit=2, dim=dim)
+    check("limit returns the first n records",
+          head.shape == (2, dim) and bool((head == vecs[:2]).all()))
+
+
+def test_fvecs_rejects_corruption():
+    print("\ntest_fvecs_rejects_corruption")
+    dim = 8
+    vecs = RNG.integers(0, 256, size=(4, dim)).astype(np.float32)
+    rec = 4 + 4 * dim
+
+    def raises(fn) -> bool:
+        try:
+            fn()
+        except ValueError:
+            return True
+        except Exception:
+            return False
+        return False
+
+    # A truncated download is the failure that would silently shrink the
+    # corpus and quietly invalidate a sweep, so it must be loud.
+    check("truncated mid-record raises",
+          raises(lambda: sift.read_fvecs(_fvecs_bytes(vecs)[:rec * 2 + 5],
+                                         dim=dim)))
+    check("wrong dimension header raises",
+          raises(lambda: sift.read_fvecs(_fvecs_bytes(vecs, dim_header=64),
+                                         dim=dim)))
+    check("empty buffer raises",
+          raises(lambda: sift.read_fvecs(b"", dim=dim)))
+    check("limit beyond end of data raises",
+          raises(lambda: sift.read_fvecs(_fvecs_bytes(vecs), limit=99,
+                                         dim=dim)))
+
+
+def test_sift_scaling_preserves_ranking():
+    print("\ntest_sift_scaling_preserves_ranking")
+    # SIFT-shaped data: 128-d, integer components 0..255. At that magnitude
+    # ||v||^2 approaches float32's exact-integer ceiling, and exact_topk_rows
+    # uses the expanded form ||v||^2 - 2*q.v, whose cancellation is worst
+    # exactly there. sift.SCALE divides by 128 -- a power of two, so a bare
+    # exponent decrement with no mantissa rounding. This asserts the property
+    # that justifies doing it at all: the ranking must not move.
+    n, dim, nq, k = 400, 128, 25, 10
+    raw = RNG.integers(0, 256, size=(n, dim)).astype(np.float32)
+    q_raw = RNG.integers(0, 256, size=(nq, dim)).astype(np.float32)
+
+    hi = exact_topk_rows(q_raw, raw, k, "l2")
+    lo = exact_topk_rows(q_raw * np.float32(sift.SCALE),
+                         raw * np.float32(sift.SCALE), k, "l2")
+    check("top-k ranking identical after scaling by 1/128",
+          bool((hi == lo).all()),
+          f"{int((hi != lo).sum())} of {hi.size} positions differ")
+
+    # The scaling itself must be exact, not merely order-preserving.
+    check("scaling is lossless (x/128*128 == x)",
+          bool(((raw * np.float32(sift.SCALE)) * np.float32(128.0) == raw).all()))
+
+
 if __name__ == "__main__":
     test_exact_topk_matches_naive()
     test_recall_and_completeness()
@@ -292,6 +381,9 @@ if __name__ == "__main__":
     test_corpus_gather()
     test_decomposition_separates_causes()
     test_agreement_tracks_divergence()
+    test_fvecs_roundtrip()
+    test_fvecs_rejects_corruption()
+    test_sift_scaling_preserves_ranking()
 
     print()
     if FAILS:
