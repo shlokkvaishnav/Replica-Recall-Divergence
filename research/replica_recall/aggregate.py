@@ -354,10 +354,12 @@ def main() -> int:
          "graph damage with no data missing.")
 
     print()
-    print("  The intended shape of the result is all four above reading [yes]:")
-    print("  replicas diverge, the detector sees it, the graph is fine, and")
-    print("  the cause is missing data. Any [no] is worth understanding before")
-    print("  writing anything up.")
+    print("  The current shape of the result is all four above reading [yes]:")
+    print("  replicas diverge, the detector sees it, the graph is damaged")
+    print("  independently of data loss, and some of the divergence is data")
+    print("  loss too. Any [no] is worth understanding before writing")
+    print("  anything up -- and if index_recall ever reads [no] again, that")
+    print("  is the earlier (refuted) hypothesis, not a regression.")
     return 0
 
 
