@@ -234,7 +234,18 @@ def main() -> int:
         bva = [x for x in bv if not np.isnan(x)]
         cva = [x for x in cv if not np.isnan(x)]
         if not bva or not cva:
-            print(f"  {label:<24} {'n/a':>18} {'n/a':>18} {'':>8}")
+            # A healthy baseline has near-identical replicas by construction
+            # (spread ~0.0001), so almost every group is excluded as a tie and
+            # the detector has structurally nothing to score -- NaN there is
+            # correct, not missing data. Printing "n/a" on both sides whenever
+            # either was empty used to silently drop a real number: on this
+            # sweep, chaos-side hit rate averaged 0.745 against chance 0.333,
+            # invisible under the old blanket check. Report whichever side has
+            # values; no p-value, since there is nothing on the other side to
+            # compare against.
+            bs = f"{np.mean(bva):.4f}" if bva else "undefined"
+            cs = f"{np.mean(cva):.4f}" if cva else "undefined"
+            print(f"  {label:<24} {bs:>18} {cs:>18} {'--':>8}")
             continue
         _, p = mann_whitney(bv, cv)
         results[key] = p
@@ -291,12 +302,25 @@ def main() -> int:
     print("=" * 78)
 
     sp = results.get("spread_mean", float("nan"))
-    hr = results.get("hit_rate", float("nan"))
     ir = results.get("index_recall", float("nan"))
     cp = results.get("completeness", float("nan"))
 
     def _say(ok, yes, no):
         print(("  [yes] " if ok else "  [no ] ") + (yes if ok else no))
+
+    # The detector's hit_rate is undefined on a healthy baseline by
+    # construction (near-identical replicas mean almost every group is
+    # excluded as a tie -- see the METRICS loop above), so it can never get a
+    # baseline/chaos p-value the way the other metrics do. Judging it needs
+    # its own chaos-only threshold rather than results.get("hit_rate"), which
+    # is always NaN here and would silently print the "no" branch even when
+    # the chaos-only rate is well above chance -- the exact case this sweep
+    # hits (mean 0.745 vs chance 0.333).
+    chaos_hr = [s["hit_rate"] for _, s in runs["chaos"] if not np.isnan(s["hit_rate"])]
+    chaos_chance = [s["chance"] for _, s in runs["chaos"] if not np.isnan(s["chance"])]
+    hr_detects = (bool(chaos_hr) and bool(chaos_chance)
+                  and np.mean(chaos_hr) >= np.mean(chaos_chance) * 1.8
+                  and np.mean(chaos_hr) >= 0.55)
 
     # Earlier phases of this project expected index_recall to hold steady
     # (divergence = pure data loss) and treated any separation there as a
@@ -308,9 +332,17 @@ def main() -> int:
     _say(not np.isnan(sp) and sp <= 0.05,
          "Replicas diverge more under failure than without it.",
          "Divergence under failure is not separable from baseline noise.")
-    _say(not np.isnan(hr) and hr <= 0.05,
-         "The ground-truth-free detector separates the two conditions.",
-         "The detector does not separate the two conditions.")
+    _say(hr_detects,
+         f"The detector picks the degraded replica well above chance under "
+         f"chaos (mean {np.mean(chaos_hr):.3f} vs chance "
+         f"{np.mean(chaos_chance):.3f}, {len(chaos_hr)}/{nc} runs scorable; "
+         f"undefined on baseline, where nothing is degraded to find)."
+         if chaos_hr else "",
+         f"The detector does not clear the DETECTS threshold under chaos "
+         f"(mean {np.mean(chaos_hr):.3f} vs chance {np.mean(chaos_chance):.3f})."
+         if chaos_hr else
+         "The detector never had enough scorable groups to evaluate, even "
+         "under chaos.")
     _say(not np.isnan(ir) and ir <= 0.05,
          "index_recall separates -- failure damages the graph independently "
          "of data loss (see graph_forensics.py for the mechanism).",
