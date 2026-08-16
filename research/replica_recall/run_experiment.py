@@ -623,10 +623,24 @@ def main() -> int:
         p.close()
 
     # ---- write results -----------------------------------------------------
+    # Canonical column order. probe_s/score_s are per-sample timings present
+    # only on reachable rows; DictWriter fills the rest with restval.
     cols = ["t_rel", "shard", "replica", "name", "reachable",
             "index_recall", "e2e_recall", "completeness",
             "n_local", "n_intended", "shard_agreement", "loo_agreement",
-            "n_confirmed_settled"]
+            "n_confirmed_settled", "probe_s", "score_s"]
+
+    # Anything the sampler emits that is not in that list gets appended rather
+    # than raising. This list was hand-maintained and fell out of sync when
+    # probing went concurrent and added two timing keys: DictWriter raises on
+    # unknown fields, so a run did its full duration of work and then died at
+    # write time with every sample lost. A schema drift is worth a column in
+    # an unexpected position; it is not worth an hour of measurement.
+    extra = sorted({k for r in rows for k in r} - set(cols) - {"t"})
+    if extra:
+        print(f"[rr] note: sampler emitted columns missing from the canonical "
+              f"list, appending: {', '.join(extra)}")
+        cols = cols + extra
     csv_path = os.path.join(RESULTS_DIR, "samples.csv")
     with open(csv_path, "w", newline="") as f:
         w = csv.DictWriter(f, fieldnames=cols)
