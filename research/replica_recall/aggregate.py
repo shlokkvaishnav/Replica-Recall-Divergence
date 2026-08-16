@@ -298,20 +298,28 @@ def main() -> int:
     def _say(ok, yes, no):
         print(("  [yes] " if ok else "  [no ] ") + (yes if ok else no))
 
+    # Earlier phases of this project expected index_recall to hold steady
+    # (divergence = pure data loss) and treated any separation there as a
+    # complication. It turned out to be the finding: index_recall separates on
+    # realistic data (lowdim, then here), meaning failure damages the graph
+    # independently of what data is missing -- see graph_forensics.py and
+    # RELATED_WORK.md. This block used to print the old expectation as the
+    # "good" outcome, backwards from what the pooled table above it showed.
     _say(not np.isnan(sp) and sp <= 0.05,
          "Replicas diverge more under failure than without it.",
          "Divergence under failure is not separable from baseline noise.")
     _say(not np.isnan(hr) and hr <= 0.05,
          "The ground-truth-free detector separates the two conditions.",
          "The detector does not separate the two conditions.")
-    _say(not np.isnan(ir) and ir > 0.05,
-         "index_recall is NOT distinguishable -- failure does not degrade "
-         "the graph.",
-         "index_recall differs between conditions -- failure may be degrading "
-         "the graph, which would complicate the data-loss story.")
+    _say(not np.isnan(ir) and ir <= 0.05,
+         "index_recall separates -- failure damages the graph independently "
+         "of data loss (see graph_forensics.py for the mechanism).",
+         "index_recall does not separate -- no evidence the graph itself is "
+         "damaged; the divergence would be pure data loss.")
     _say(not np.isnan(cp) and cp <= 0.05,
-         "completeness IS distinguishable -- the divergence is data loss.",
-         "completeness does not separate -- the mechanism is unclear.")
+         "completeness separates -- some of the divergence is data loss too.",
+         "completeness does not separate -- the divergence looks like pure "
+         "graph damage with no data missing.")
 
     print()
     print("  The intended shape of the result is all four above reading [yes]:")
