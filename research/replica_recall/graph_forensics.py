@@ -229,6 +229,67 @@ def analyse(path: str) -> dict:
     return out
 
 
+def link_quality(nodes, sample: int = 2000, m: int = 16,
+                 seed: int = 20260808, batch: int = 256) -> dict:
+    """How good are a node's stored neighbours, versus the best it could have?
+
+    Structural forensics can come back clean while search still degrades: the
+    graph can have healthy degrees, no orphans and full reachability, and yet
+    every adjacency list can point somewhere worse than it should. That is the
+    damage mode a replica suffers when it misses writes -- nodes inserted while
+    the replica was behind get linked into a sparser graph, and nothing ever
+    revisits those links once the missing vectors arrive.
+
+    For a sample of nodes, this computes the exact m nearest neighbours *among
+    the vectors this replica actually holds*, and reports what fraction of them
+    appear in the node's stored layer-0 adjacency list. Ground truth is drawn
+    from the replica's own contents, exactly as index_recall does, so the score
+    isolates graph quality from data completeness.
+
+    The absolute value is not meant to reach 1.0 and a healthy index will not
+    score 1.0: selection is Algorithm 4's diversity heuristic, which
+    deliberately keeps some far neighbours for navigability rather than the
+    closest m. Only differences between replicas holding the same data are
+    interpretable.
+    """
+    n = len(nodes)
+    if n < m + 2:
+        return {}
+
+    vecs = np.ascontiguousarray(nodes["vector"])
+    counts = np.clip(nodes["neighbor_counts"][:, 0], 0, M_MAX0)
+    nbrs = nodes["neighbors"][:, 0, :]
+
+    rng = np.random.default_rng(seed)
+    idx = np.sort(rng.choice(n, size=min(sample, n), replace=False))
+
+    sq = np.einsum("ij,ij->i", vecs, vecs)
+    scores = np.empty(len(idx), dtype=np.float64)
+
+    for s in range(0, len(idx), batch):
+        rows = idx[s:s + batch]
+        q = vecs[rows]
+        # Same expanded form the index itself uses; the omitted ||q||^2 is
+        # constant per row and does not affect ranking.
+        d = sq[None, :] - 2.0 * (q @ vecs.T)
+        d[np.arange(len(rows)), rows] = np.inf      # exclude self
+        top = np.argpartition(d, m, axis=1)[:, :m]
+
+        for j, r in enumerate(rows):
+            stored = nbrs[r, :counts[r]]
+            if stored.size == 0:
+                scores[s + j] = 0.0
+                continue
+            scores[s + j] = np.isin(top[j], stored).sum() / m
+
+    return {
+        "link_quality": float(scores.mean()),
+        "link_quality_p5": float(np.percentile(scores, 5)),
+        "link_quality_zero": int((scores == 0).sum()),
+        "link_quality_n": int(len(idx)),
+    }
+
+
 FIELDS = [
     ("nodes_examined", "nodes written", "{:,}"),
     ("element_count", "element_count (header)", "{:,}"),
@@ -239,6 +300,9 @@ FIELDS = [
     ("unreachable_from_entry_frac", "  as fraction", "{:.4%}"),
     ("out_degree_0", "out-degree 0", "{:,}"),
     ("isolated_both_ways", "isolated both ways", "{:,}"),
+    ("link_quality", "link quality (vs ideal)", "{:.4f}"),
+    ("link_quality_p5", "  p5", "{:.4f}"),
+    ("link_quality_zero", "  nodes scoring 0", "{:,}"),
     ("deg0_mean", "mean layer-0 degree", "{:.2f}"),
     ("deg0_min", "min layer-0 degree", "{:,}"),
     ("asymmetric_frac", "asymmetric edges", "{:.4%}"),
@@ -262,6 +326,11 @@ def main() -> int:
                          "Replicas of one shard hold the same intended data, "
                          "so differences between them are damage.")
     ap.add_argument("--json", default=None, help="also write raw results here")
+    ap.add_argument("--link-quality", type=int, default=0, metavar="N",
+                    help="also score N sampled nodes for neighbour-list "
+                         "quality against exact ground truth drawn from the "
+                         "replica's own contents. Costs a brute-force pass, "
+                         "so it is off by default; 2000 is plenty.")
     args = ap.parse_args()
 
     targets = []
@@ -280,7 +349,11 @@ def main() -> int:
     results = []
     for t in targets:
         try:
-            results.append(analyse(t))
+            r = analyse(t)
+            if args.link_quality:
+                _, nodes, _ = load_index(t)
+                r.update(link_quality(nodes, sample=args.link_quality))
+            results.append(r)
         except Exception as e:
             print(f"  {os.path.basename(t)}: FAILED ({e})", file=sys.stderr)
 
