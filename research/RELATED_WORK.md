@@ -5,10 +5,15 @@ published work. It exists to keep the project honest: the claims here are
 narrower than the ones that first suggested themselves, and the last section
 lists the things we must **not** say because someone else already owns them.
 
-**Status of the citations.** These were gathered by literature search in August
-2026 and are recorded with URLs so they can be checked. They have not each been
-read end to end. Verify before any external submission — particularly the 2026
-arXiv entries, which are recent enough that their claims may have moved.
+**Status of the citations.** Gathered by literature search in August 2026, then
+independently verified against source — every arXiv ID resolves and matches its
+claimed content, but one citation (ClickHouse #104674, previously the lead
+production-evidence item) turned out to be a self-retracted bug report and has
+been removed rather than softened; see §6. Two smaller corrections — an
+overstated "ground-truth-free" claim (§5, entry 11) and a misattributed author
+on the STTT citation (§1) — are marked inline where they occur. Still worth a
+second read before external submission, particularly the 2026 entries, which
+are recent enough that their own claims may still move.
 
 ---
 
@@ -58,7 +63,9 @@ setting and leaves the replicated setting open. That is exactly the seam this
 work sits in.
 
 **Formal lineage:** quasi-linearizability (Afek, Korland & Yanovsky, OPODIS 2010;
-verification in Zhang et al., STTT 2015) and quantitative quiescent consistency
+verification in Adhikari et al., STTT 2015/2016 —
+correcting an earlier misattribution to "Zhang et al."; Zhang is a coauthor,
+not first author) and quantitative quiescent consistency
 (Jagadeesan & Riely, ICALP 2014) are the right ancestors for "approximately
 correct read" — but they relax *ordering* by a bounded amount, not *set
 membership under an approximate retrieval function*. Cite as lineage; do not
@@ -116,9 +123,11 @@ identity**:
 
 The structural point: **two correct HNSW graphs built over identical data differ
 bit-for-bit**, so none of these mechanisms can be pointed at the index. Elastic's
-own writeup confirms the architecture — every shard *and every replica* builds
-its own HNSW graph per segment. Hash-based comparison is simply not available for
-the thing that degraded.
+own writeup confirms that every *shard* builds its own independent HNSW graph
+per segment; the extension to every *replica* is a standard-architecture
+inference (each replica is itself sharded the same way), not something that
+specific page states about replicas directly. Hash-based comparison is simply
+not available for the thing that degraded.
 
 This forces an honest weakening of our healing result, handled in §Framing risks.
 
@@ -127,9 +136,14 @@ This forces an honest weakening of our healing result, handled in §Framing risk
 The technique class is old and the ANN-specific instances already exist:
 
 - ***ANN Search: Recall What Matters*** (Dimitropoulos et al., arXiv:2606.04522)
-  proposes `1/Ratio@k`, explicitly "judge-free, hyperparameter-free... computable
-  from the same inputs ANN benchmarks already provide" — a ground-truth-free ANN
-  quality measure. This is the closest hit and must be engaged with.
+  proposes `1/Ratio@k`, "judge-free, hyperparameter-free... computable from the
+  same inputs ANN benchmarks already provide." **Correction:** an earlier draft
+  called this "ground-truth-free"; it is not. The metric is defined over
+  differences between the retrieved and *true* nearest-neighbour distances, so
+  it still needs exact ground truth to compute — "judge-free" (no LLM/human
+  judge) is not the same property. It is the closest hit for *low-overhead*
+  ANN quality estimation, not for the ground-truth-free property this project
+  actually needs.
 - ***Semantic Recall for Vector Search*** (SIGIR 2026) introduces *Tolerant
   Recall* as a proxy for when relevant objects cannot be identified.
 - ***Towards Robustness: A Critique of Current Vector Database Assessments***
@@ -145,35 +159,48 @@ identical*, so disagreement between them is damage rather than model diversity.
 The 1e-4 independently-built-replica control is what makes that attribution
 sound. Claim the argument and the control, not the technique.
 
-### 6. Production evidence — **strong**
+### 6. Production evidence — **moderate**
 
 Ranked by how directly each supports "approximation converts data loss into
-silence":
+silence". **Correction:** an earlier version of this section led with
+ClickHouse #104674 as the strongest evidence and called its resolution "the
+argument." A verification pass reading the full comment thread found the
+reporter **retracted their own report** — on retest, the ANN/brute-force
+disagreement reproduced on a clean server with no crash involved; it was a
+bf16-quantization precision artifact, not a durability bug, and there was no
+maintainer dismissal to cite. It is removed below. This is exactly the failure
+mode this section warns about elsewhere (§8, framing risks) — a citation that
+sounds too convenient checked out to be wrong, which is why every citation here
+has now been read past its headline.
 
-1. **ClickHouse #104674** — `vector_similarity` index returns wrong nearest
-   neighbours after a crash mid-INSERT. The HNSW index desyncs from the MergeTree
-   data; ANN queries "silently return wrong rows — completely unrelated
-   neighbors — with no error", and the row count stays correct. ~30% reproduction
-   under syscall injection. Opened May 2026, **closed as not planned.** This is
-   the thesis in a single issue, and the resolution is the argument.
-2. **Qdrant #4626** — upserts partially committed during node restart; the
-   restarted node never syncs what it missed.
-3. **Qdrant #4627** — node restart during deletes leaves points with empty
-   payloads. **#5215**, **#5101** — replication and migration inconsistency.
-4. **Milvus #30254** — segment loss via the garbage collector.
-5. **Milvus #37703** — after chaos and *nominal* recovery, search failed with
-   `segment lacks`, 69% success rate. **This one errored loudly**, and is a
-   genuine counterexample to universal silence. Cite it honestly.
-6. **Pinecone's own observability blog**: *"A stale, undersized, or
-   under-resourced index doesn't go down — it returns the wrong results. Without
-   continuous visibility into index health, there's no signal that anything is
-   wrong until the AI application has already been serving degraded results."*
-   A vendor stating the thesis in prose. Good motivation, and a reminder that the
-   *observation* is not novel — only the measurement is.
+1. **Milvus #37703** — after chaos and *nominal* recovery, search failed with
+   `segment lacks`, 69% success rate (`Op.search succ rate 0.6933...` in the
+   issue's own log). **This one errored loudly**, and is a genuine
+   counterexample to universal silence — cite it honestly as that, not as an
+   instance of the silent-failure thesis.
+2. **Qdrant #4626** — confirmed: upserts committed by majority during a node
+   restart never sync to the node once it comes back.
+3. **Qdrant #4627** — confirmed: deletes during a restart leave the restarted
+   node's points with empty, unsynced payloads.
+4. **Milvus #30254** — confirmed: `NoSuchKey` errors on segment files, traced to
+   the garbage collector deleting segments still in use.
+5. **Pinecone's observability blog** states the thesis in prose, close to but
+   not exactly the wording an earlier draft quoted verbatim — the actual text is
+   "a stale, undersized, or under-resourced index doesn't go down. It returns
+   the wrong results. The problem is that without continuous visibility into
+   index health... there's no signal [something is wrong]." Paraphrase, don't
+   quote, if this is used. A vendor stating the thesis in prose is good
+   motivation and a reminder that the *observation* is not novel — only the
+   measurement is.
 
 **What was not found:** any public postmortem or engineering writeup that
-*quantified* a recall divergence between replicas of the same shard. That absence
-is the motivation gap, and also a mild risk: a reviewer may ask who was harmed.
+*quantified* a recall divergence between replicas of the same shard, still. The
+motivation gap is now sharper without ClickHouse #104674 to lean on — Milvus
+#37703 and the Qdrant pair are real but none of them isolate a recall number
+the way this project's `index_recall`/`completeness` decomposition does. A
+reviewer may reasonably ask who was harmed, and the honest answer is "no public
+report of exactly this, only adjacent bugs" — which is closer to the actual
+strength of the motivation than the earlier draft implied.
 
 ---
 
@@ -195,7 +222,7 @@ correct read, and no Jepsen analysis has targeted a vector store.
 
 **Already well-trodden — cite, do not claim:** the ANN oracle problem
 (arXiv:2502.20812 states it in the abstract); average recall hiding variance
-(arXiv:2507.00379); ground-truth-free ANN quality estimation (arXiv:2606.04522,
+(arXiv:2507.00379); low-overhead ANN quality estimation (arXiv:2606.04522,
 SIGIR'26); jackknife/ensemble disagreement; recall decay under churn
 (FreshDiskANN, SPFresh, Big-ANN'23); Merkle-tree anti-entropy (Dynamo); and the
 general observation that a degraded index returns worse answers instead of
@@ -217,12 +244,31 @@ paging you — Pinecone says this in a marketing post.
 | 8 | DeCandia et al., *Dynamo*, SOSP 2007 | https://doi.org/10.1145/1294261.1294281 | Merkle anti-entropy assumes exact contents |
 | 9 | Weaviate async replication (hash-tree digests), v1.29 | https://docs.weaviate.io/deploy/configuration/async-rep | Production Merkle anti-entropy over objects, not the index |
 | 10 | Vespa consistency model | https://docs.vespa.ai/en/content/consistency.html | "Metadata is checksummed"; silent on the ANN graph |
-| 11 | Dimitropoulos et al., *ANN Search: Recall What Matters* (1/Ratio@k), arXiv:2606.04522 | https://arxiv.org/abs/2606.04522 | Closest ground-truth-free ANN quality metric |
+| 11 | Dimitropoulos et al., *ANN Search: Recall What Matters* (1/Ratio@k), arXiv:2606.04522 | https://arxiv.org/abs/2606.04522 | Low-overhead ANN quality metric — needs true-NN distances, so not actually ground-truth-free; do not call it that |
 | 12 | *Semantic Recall for Vector Search*, SIGIR 2026 | https://doi.org/10.1145/3805712.3809894 | Proxy recall without identifiable ground truth |
-| 13 | ClickHouse #104674 — silent wrong-answer HNSW durability bug, closed not-planned | https://github.com/ClickHouse/ClickHouse/issues/104674 | Best production evidence |
+| 13 | Milvus #37703 — chaos recovery leaves search failing (`segment lacks`, 69% success) | https://github.com/milvus-io/milvus/issues/37703 | Best production evidence — genuinely LOUD failure, cite as the honest counterexample, not as silent-failure support |
 | 14 | Qdrant #4626 / #4627 — missed upserts and deletes after node restart | https://github.com/qdrant/qdrant/issues/4626 | Replica divergence in a shipping vector DB |
 | 15 | Milvus OSS QA / Chaos Mesh testing | https://milvus.io/blog/deep-dive-6-oss-qa.md | Vendor chaos suite asserts liveness and counts, not recall |
-| 16 | Afek/Korland/Yanovsky quasi-linearizability; Zhang et al., STTT 2015 | https://link.springer.com/article/10.1007/s10009-015-0373-2 | Formal lineage for relaxed correctness |
+| 16 | Afek/Korland/Yanovsky quasi-linearizability; Adhikari et al., STTT 2015 | https://link.springer.com/article/10.1007/s10009-015-0373-2 | Formal lineage for relaxed correctness |
+
+**Removed:** ClickHouse #104674 was in this slot in an earlier draft as "best
+production evidence." Verification found the reporter retracted it — the
+disagreement was a bf16-precision artifact reproducing with no crash, not a
+durability bug. See §6 above.
+
+**Graph-degradation mechanism** (for `graph_forensics.py`'s hypothesis —
+degradation without topological damage — rather than the replication claim
+above):
+
+| # | Reference | URL | Why |
+|---|---|---|---|
+| 17 | Elliott & Clark, *The Impacts of Data, Ordering, and Intrinsic Dimensionality on Recall in HNSW*, arXiv:2405.17813, 2024 | https://arxiv.org/abs/2405.17813 | HNSW is not insertion-order invariant — ordering shifts recall up to 12pp. Supports the mechanism's plausibility; cite as lineage, not as covering it (they order by data properties, not corpus completeness at insertion time) |
+| 18 | Mandarapu & Kunkunuru, *When to Repair a Graph ANN Index*, arXiv:2607.00728, 2026 | https://arxiv.org/abs/2607.00728 | Confirms "no automatic self-repair" as an accepted premise, but their mechanism is deletion-driven topological orphaning — dangling search paths after a delete. Explicitly does not cover semantic degradation with intact reachability; cite to draw that distinction, since it is the reason structural forensics alone would miss this |
+
+No paper found does a direct sensitivity analysis of Algorithm 4's diversity
+heuristic as a function of candidate-pool size at insertion — the specific
+causal chain (partial-corpus insertion → permanently worse links, invisible to
+every structural check) appears to still be ours to establish empirically.
 
 Also relevant: Elastic's HNSW-per-segment writeup
 (https://www.elastic.co/search-labs/blog/hnsw-graph), Pinecone observability
@@ -250,9 +296,10 @@ against it.
    unmeasured.
 
 4. **Do not claim `leave_one_out_agreement` as a new detector.** Jackknife
-   ensemble disagreement is standard and `1/Ratio@k` already gives ground-truth-free
-   ANN quality. Claim the replica-identity attribution argument plus the 1e-4
-   nondeterminism control.
+   ensemble disagreement is standard, and `1/Ratio@k` already gives a
+   low-overhead ANN quality signal (not actually ground-truth-free — it still
+   needs true-neighbour distances; see the must-cite table entry). Claim the
+   replica-identity attribution argument plus the 1e-4 nondeterminism control.
 
 5. **Do not claim "no vector database repairs missing data."** Weaviate 1.29
    ships real hash-tree anti-entropy; Vespa reconciles by timestamped-document
@@ -267,8 +314,11 @@ against it.
 
 6. **Do not claim all such failures are silent.** Milvus #37703 errored loudly.
    The claim is *"approximation permits silence, and the silent variants are the
-   ones that go unfixed"* — with ClickHouse #104674's "closed as not planned" as
-   Exhibit A.
+   ones that go unfixed"* — this project's own `miss@stop == miss@end` result is
+   the load-bearing exhibit here now, not a borrowed production issue. No public
+   report found *quantifies* a silent recall divergence the way this project's
+   own measurement does; say that plainly rather than reaching for a citation
+   that doesn't hold up (see §6 above on ClickHouse #104674).
 
 7. **Watch the title collision** with arXiv:2511.04221 ("Convergent ANN Search").
    Distinguish explicitly.
