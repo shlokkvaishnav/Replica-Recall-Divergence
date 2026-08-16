@@ -66,17 +66,32 @@ HEADER_DTYPE = np.dtype([
 assert HEADER_DTYPE.itemsize == HEADER_SIZE
 
 
-def load_index(path: str):
-    """mmap an index.ndb and return (header, nodes) with nodes truncated to
-    the live extent."""
-    if os.path.isdir(path):
-        path = os.path.join(path, "index.ndb")
-    size = os.path.getsize(path)
+def load_index(src):
+    """Open an index.ndb and return (header, nodes, capacity), with nodes
+    truncated to the written extent.
 
-    raw = np.memmap(path, dtype=np.uint8, mode="r")
+    src may be a directory, a path, or a bytes buffer -- the buffer form lets
+    the tests build an index with a known graph and check that these metrics
+    recover it, which is the only thing standing between this tool and a
+    confidently wrong conclusion about a binary format.
+    """
+    if isinstance(src, (bytes, bytearray, memoryview)):
+        raw = np.frombuffer(bytes(src), dtype=np.uint8)
+        label = "<buffer>"
+    else:
+        path = src
+        if os.path.isdir(path):
+            path = os.path.join(path, "index.ndb")
+        raw = np.memmap(path, dtype=np.uint8, mode="r")
+        label = path
+
+    size = raw.nbytes
+    if size < HEADER_SIZE:
+        raise ValueError(f"{label}: {size} bytes is smaller than the header")
+
     header = raw[:HEADER_SIZE].view(HEADER_DTYPE)[0]
     if int(header["magic"]) != NANODB_MAGIC:
-        raise ValueError(f"{path}: bad magic 0x{int(header['magic']):08X}, "
+        raise ValueError(f"{label}: bad magic 0x{int(header['magic']):08X}, "
                          f"expected 0x{NANODB_MAGIC:08X}")
 
     capacity = (size - HEADER_SIZE) // NODE_DTYPE.itemsize
@@ -103,13 +118,14 @@ def load_index(path: str):
     return header, all_nodes[:extent], capacity
 
 
-def analyse(path: str) -> dict:
-    header, nodes, capacity = load_index(path)
+def analyse(src) -> dict:
+    header, nodes, capacity = load_index(src)
     n = len(nodes)
     entry = int(header["entry_point_id"])
 
     out: dict = {
-        "path": path,
+        "path": "<buffer>" if isinstance(src, (bytes, bytearray, memoryview))
+                else src,
         "element_count": int(header["element_count"]),
         "capacity": int(capacity),
         "entry_point_id": entry,

@@ -21,6 +21,7 @@ from metrics import (                                   # noqa: E402
     pairwise_agreement, leave_one_out_agreement, score_replica,
 )
 import sift                                             # noqa: E402
+import graph_forensics as gf                            # noqa: E402
 
 
 RNG = np.random.default_rng(20260808)
@@ -373,6 +374,145 @@ def test_sift_scaling_preserves_ranking():
           bool(((raw * np.float32(sift.SCALE)) * np.float32(128.0) == raw).all()))
 
 
+# ---------------------------------------------------------------------------
+# Graph forensics. The tool reads a C++ struct straight off disk, so the only
+# thing between it and a confidently wrong conclusion is a test that builds an
+# index with a KNOWN graph and checks the metrics recover it.
+# ---------------------------------------------------------------------------
+
+def _build_index(vecs: np.ndarray, adjacency: list[list[int]],
+                 entry: int = 0, element_count: int | None = None) -> bytes:
+    """Synthesise an index.ndb with a chosen layer-0 graph."""
+    n = len(vecs)
+    nodes = np.zeros(n, dtype=gf.NODE_DTYPE)
+    nodes["neighbors"][:] = gf.NO_NEIGHBOR      # as the Node constructor does
+    nodes["id"] = np.arange(n)
+    nodes["vector"][:, :vecs.shape[1]] = vecs
+    for i, nbr in enumerate(adjacency):
+        nodes["neighbor_counts"][i, 0] = len(nbr)
+        if nbr:
+            nodes["neighbors"][i, 0, :len(nbr)] = nbr
+
+    hdr = np.zeros(1, dtype=gf.HEADER_DTYPE)
+    hdr["magic"] = gf.NANODB_MAGIC
+    hdr["element_count"] = n if element_count is None else element_count
+    hdr["entry_point_id"] = entry
+    hdr["max_layer"] = 0
+    return hdr.tobytes() + nodes.tobytes()
+
+
+def test_forensics_layout():
+    print("\ntest_forensics_layout")
+    # These come from offsetof/sizeof on the compiled struct. If the C++ ever
+    # changes, this test is the tripwire -- every forensic number is otherwise
+    # silently reinterpreting the wrong bytes.
+    check("Node is 1056 bytes", gf.NODE_DTYPE.itemsize == 1056,
+          str(gf.NODE_DTYPE.itemsize))
+    check("FileHeader is 64 bytes", gf.HEADER_DTYPE.itemsize == 64)
+    off = {k: gf.NODE_DTYPE.fields[k][1] for k in gf.NODE_DTYPE.names}
+    check("vector @ 12", off["vector"] == 12, str(off["vector"]))
+    check("neighbors @ 524", off["neighbors"] == 524, str(off["neighbors"]))
+    check("neighbor_counts @ 1036", off["neighbor_counts"] == 1036,
+          str(off["neighbor_counts"]))
+
+    vecs = RNG.random((6, 128), dtype=np.float32)
+    buf = _build_index(vecs, [[1], [2], [3], [4], [5], [0]])
+    hdr, nodes, cap = gf.load_index(buf)
+    check("round-trips node count", len(nodes) == 6, str(len(nodes)))
+    check("round-trips vectors", bool(np.allclose(nodes["vector"], vecs)))
+    check("bad magic raises",
+          _raises(lambda: gf.load_index(b"\x00" * 4096), ValueError))
+
+
+def _raises(fn, exc) -> bool:
+    try:
+        fn()
+    except exc:
+        return True
+    except Exception:
+        return False
+    return False
+
+
+def test_forensics_finds_known_damage():
+    print("\ntest_forensics_finds_known_damage")
+    vecs = RNG.random((8, 128), dtype=np.float32)
+    # A ring, so every node has exactly one in-edge and one out-edge...
+    adj = [[(i + 1) % 8] for i in range(8)]
+    # ...then break it in three specific, separately-detectable ways.
+    adj[3] = []           # node 3: out-degree 0 -- and node 4 loses its only
+    #                       in-edge as a side effect
+    adj[2] = [99]         # node 2 -> nonexistent id: a dangling edge, and
+    #                       node 3 loses its only in-edge
+    adj[5] = [5, 6]       # node 5: a self-loop (6 keeps its in-edge)
+    buf = _build_index(vecs, adj, entry=0)
+    r = gf.analyse(buf)
+
+    check("counts the written nodes", r["nodes_examined"] == 8,
+          str(r["nodes_examined"]))
+    check("finds the out-degree-0 node", r["out_degree_0"] == 1,
+          str(r["out_degree_0"]))
+    check("finds the dangling edge", r["dangling_edges"] == 1,
+          str(r["dangling_edges"]))
+    check("finds the self loop", r["self_loops"] == 1, str(r["self_loops"]))
+    # Two nodes end up with nothing pointing at them: node 3 (node 2 was
+    # redirected to id 99) and node 4 (node 3's list was emptied). Severing an
+    # edge orphans the node at the far end, which is exactly the accounting
+    # the real analysis depends on.
+    check("finds the nodes nothing points at", r["in_degree_0"] == 2,
+          f"{r['in_degree_0']}")
+    # The ring is severed at 2, so BFS from 0 reaches 0,1,2 and stops.
+    check("BFS stops at the break", r["reachable_from_entry"] == 3,
+          str(r["reachable_from_entry"]))
+
+    # A node written but never counted is the population the mechanism
+    # hypothesis predicts; the extent scan must see past element_count.
+    buf2 = _build_index(vecs, [[1]] * 8, entry=0, element_count=5)
+    r2 = gf.analyse(buf2)
+    check("scans past element_count", r2["nodes_examined"] == 8,
+          str(r2["nodes_examined"]))
+    check("reports the uncounted nodes", r2["uncounted_nodes"] == 3,
+          str(r2["uncounted_nodes"]))
+
+
+def test_link_quality_ranks_graphs():
+    print("\ntest_link_quality_ranks_graphs")
+    n, dim, m = 60, 16, 4
+    vecs = RNG.random((n, dim), dtype=np.float32)
+
+    # Exact m nearest neighbours of every node, by brute force.
+    d = ((vecs[:, None, :] - vecs[None, :, :]) ** 2).sum(-1)
+    np.fill_diagonal(d, np.inf)
+    truth = np.argsort(d, axis=1)[:, :m]
+    worst = np.argsort(d, axis=1)[:, -m:]
+
+    perfect = gf.link_quality(gf.load_index(_build_index(
+        vecs, [list(row) for row in truth]))[1], sample=n, m=m)
+    awful = gf.link_quality(gf.load_index(_build_index(
+        vecs, [list(row) for row in worst]))[1], sample=n, m=m)
+
+    check("perfect neighbours score 1.0",
+          approx(perfect["link_quality"], 1.0, 1e-9),
+          f"{perfect['link_quality']:.4f}")
+    check("farthest neighbours score 0.0",
+          approx(awful["link_quality"], 0.0, 1e-9),
+          f"{awful['link_quality']:.4f}")
+
+    # The metric has to be monotone in between, or a small real degradation
+    # would not register as a smaller number.
+    prev, monotone = 1.0 + 1e-9, True
+    for keep in (4, 3, 2, 1, 0):
+        adj = [list(truth[i][:keep]) + list(worst[i][:m - keep])
+               for i in range(n)]
+        q = gf.link_quality(gf.load_index(_build_index(vecs, adj))[1],
+                            sample=n, m=m)["link_quality"]
+        print(f"    {keep}/{m} true neighbours kept -> link quality {q:.4f}")
+        if q > prev + 1e-9:
+            monotone = False
+        prev = q
+    check("degrades monotonically as links get worse", monotone)
+
+
 if __name__ == "__main__":
     test_exact_topk_matches_naive()
     test_recall_and_completeness()
@@ -384,6 +524,9 @@ if __name__ == "__main__":
     test_fvecs_roundtrip()
     test_fvecs_rejects_corruption()
     test_sift_scaling_preserves_ranking()
+    test_forensics_layout()
+    test_forensics_finds_known_damage()
+    test_link_quality_ranks_graphs()
 
     print()
     if FAILS:
