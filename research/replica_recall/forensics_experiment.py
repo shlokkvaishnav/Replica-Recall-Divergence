@@ -247,6 +247,18 @@ def main() -> int:
                     help="nodes per replica scored for link quality")
     ap.add_argument("--report", action="store_true",
                     help="re-print from saved results, run nothing")
+    ap.add_argument("--conditions", nargs="+", default=["baseline", "chaos"],
+                    choices=("baseline", "chaos"),
+                    help="which conditions to run (default both). Baseline's "
+                         "structural forensics are already established (0/30 "
+                         "replicas showed any reachability damage) -- pass "
+                         "'--conditions chaos' to spend the whole time budget "
+                         "characterizing the rare-but-severe chaos failure "
+                         "mode instead of re-confirming a settled baseline.")
+    ap.add_argument("--append", action="store_true",
+                    help="add to the existing forensics_results.json instead "
+                         "of starting over (use a fresh --seed-base so seeds "
+                         "don't collide with what's already there)")
     args, extra = ap.parse_known_args()
 
     if args.report:
@@ -261,15 +273,20 @@ def main() -> int:
         return 1
 
     seeds = [args.seed_base + i for i in range(args.seeds)]
-    total = len(seeds) * 2
-    print(f"[forensics] {len(seeds)} seeds x 2 conditions = {total} runs, "
+    total = len(seeds) * len(args.conditions)
+    print(f"[forensics] {len(seeds)} seeds x {len(args.conditions)} "
+          f"condition(s) = {total} runs, "
           f"~{total * (args.duration + 45) / 60:.0f} min")
     print(f"[forensics] corpus={args.dist}  link-quality sample={args.sample}")
     print()
 
     results: list[dict] = []
+    if args.append and os.path.exists(OUT_JSON):
+        results = json.load(open(OUT_JSON))
+        print(f"[forensics] appending to {len(results)} existing records")
+
     for seed in seeds:
-        for cond in ("baseline", "chaos"):
+        for cond in args.conditions:
             results += run_one(seed, cond, args.duration, args.writers,
                                args.dist, args.sample, extra)
             # Written after every run: these are expensive to reproduce and a
