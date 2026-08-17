@@ -3,6 +3,7 @@
 #include "../include/index/hnsw.hpp"
 #include "id_map_store.hpp"
 #include <grpcpp/grpcpp.h>
+#include <algorithm>
 
 namespace nanodb {
 namespace cluster {
@@ -26,7 +27,41 @@ public:
         }
         std::vector<float> vec(request->vector().begin(), request->vector().end());
         auto [local_id, is_new] = id_map_.assign(request->external_id());
-        (void)is_new;
+
+        // A duplicate external_id that's still live on this shard. IdMapStore
+        // entries never get removed on delete (only the HNSW node gets
+        // tombstoned -- see ListLocalIds above), so is_new alone can't tell
+        // "already live" apart from "previously deleted, now being revived";
+        // is_deleted() does. A tombstoned id falls through to a normal
+        // insert() below, exactly as before -- this only changes behavior
+        // for a genuinely live duplicate.
+        //
+        // This case is reachable legitimately: RemoveShard's rebalance path
+        // is documented as idempotent (see the "migration is idempotent"
+        // retry message) and re-migrates every key on retry, including ones
+        // that already landed on a prior attempt. Insert() used to run
+        // unconditionally either way, silently overwriting the stored vector
+        // and rewiring its links with no warning -- see
+        // docs/postmortem-catastrophic-disconnection.md for why that turned
+        // out not to be the cause of the graph damage investigated there, but
+        // it's a real correctness problem regardless. Same data now succeeds
+        // as a no-op (what a migration retry actually looks like); different
+        // data is rejected instead of silently replacing what was there.
+        if (!is_new && !index_.is_deleted(local_id)) {
+            std::vector<float> existing_vec = index_.get_vector_data(local_id);
+            std::string existing_meta = index_.get_metadata(local_id);
+            bool same = existing_vec.size() == vec.size() &&
+                        std::equal(existing_vec.begin(), existing_vec.end(), vec.begin()) &&
+                        existing_meta == request->metadata();
+            if (!same) {
+                response->set_ok(false);
+                response->set_error("external_id already exists with different data");
+                return grpc::Status::OK;
+            }
+            response->set_ok(true);
+            return grpc::Status::OK;
+        }
+
         index_.insert(vec, local_id, request->metadata());
         response->set_ok(true);
         return grpc::Status::OK;
