@@ -20,7 +20,10 @@ namespace nanodb {
     //   1. Call train() on a representative sample of your dataset.
     //   2. Use quantize() before inserting into a compressed index.
     //   3. Use dequantize() to recover approximate float vectors for re-ranking.
-    //   4. Use quantize_distance() for fast approximate distance on int8 data.
+    //
+    // Nothing in the search path calls quantize()'d vectors yet -- this class
+    // is trained and usable, but not wired into HNSW insert/search. A fast
+    // int8 distance kernel would be the missing piece to actually use it.
     //
     // Memory comparison (128d vectors):
     //   float32: 128 * 4 = 512 bytes per vector
@@ -61,13 +64,6 @@ namespace nanodb {
             }
         }
 
-        // Convenience overload returning a vector.
-        std::vector<int8_t> quantize(const float* in, size_t dim) const {
-            std::vector<int8_t> out(dim);
-            quantize(in, out.data(), dim);
-            return out;
-        }
-
         // Dequantize an int8 vector back to float32 (approximate reconstruction).
         // Useful for re-ranking a shortlist of candidates.
         void dequantize(const int8_t* in, float* out, size_t dim) const {
@@ -79,24 +75,8 @@ namespace nanodb {
             }
         }
 
-        // Fast approximate L2 distance between two int8 quantized vectors.
-        // Uses integer arithmetic — no floating point, no SIMD needed.
-        // Suitable for pre-filtering large candidate sets before exact re-ranking.
-        int32_t quantize_distance(const int8_t* a, const int8_t* b, size_t dim) const {
-            int32_t sum = 0;
-            for (size_t i = 0; i < dim; ++i) {
-                int32_t diff = static_cast<int32_t>(a[i]) - static_cast<int32_t>(b[i]);
-                sum += diff * diff;
-            }
-            return sum;
-        }
-
         bool is_trained() const { return trained_; }
         size_t dim() const { return dim_; }
-
-        // Access per-dimension range (useful for serialization)
-        const std::vector<float>& min_vals() const { return min_; }
-        const std::vector<float>& max_vals() const { return max_; }
 
     private:
         std::vector<float> min_;

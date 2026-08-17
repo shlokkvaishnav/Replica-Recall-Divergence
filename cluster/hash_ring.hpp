@@ -57,9 +57,6 @@ public:
         return it->second;
     }
 
-    bool empty() const { return ring_.empty(); }
-    size_t point_count() const { return ring_.size(); }
-
 private:
     std::vector<std::pair<uint64_t, int>> ring_;
 };

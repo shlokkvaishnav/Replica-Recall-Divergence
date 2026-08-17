@@ -25,7 +25,6 @@ class Gauge {
 public:
     void set(int64_t v) { value_.store(v, std::memory_order_relaxed); }
     void inc(int64_t n = 1) { value_.fetch_add(n, std::memory_order_relaxed); }
-    void dec(int64_t n = 1) { value_.fetch_sub(n, std::memory_order_relaxed); }
     int64_t value() const { return value_.load(std::memory_order_relaxed); }
 private:
     std::atomic<int64_t> value_{0};

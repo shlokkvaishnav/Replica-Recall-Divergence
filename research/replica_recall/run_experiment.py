@@ -268,10 +268,6 @@ class RetainingWriter:
             return Corpus(self._corpus_ids, self._corpus_mat,
                           self._corpus_row, self._corpus_n)
 
-    def snapshot_vectors(self) -> dict[str, np.ndarray]:
-        with self.lock:
-            return dict(self.vector_of)
-
 
 # ---------------------------------------------------------------------------
 # Sampler

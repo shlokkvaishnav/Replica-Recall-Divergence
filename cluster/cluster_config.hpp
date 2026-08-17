@@ -17,7 +17,6 @@ struct ShardEndpoint {
     std::string host;
     int port;
     bool is_primary;
-    std::string address() const { return host + ":" + std::to_string(port); }
 };
 
 inline std::vector<ShardEndpoint> load_cluster_config(const std::string& path) {

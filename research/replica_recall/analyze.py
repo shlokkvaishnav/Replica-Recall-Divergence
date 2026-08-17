@@ -501,10 +501,6 @@ def heal_stats(rows, meta) -> dict | None:
         out["healed"] = (None if damage <= 1e-9
                          else bool(out["recovered_frac"] >= 0.9))
 
-    # Kept for continuity of the older ratio-based reporting.
-    pre_c = out["pre"]["completeness"]
-    out["deficit"] = (float("nan") if (last is None or np.isnan(pre_c))
-                      else pre_c - last["completeness"])
     return out
 
 

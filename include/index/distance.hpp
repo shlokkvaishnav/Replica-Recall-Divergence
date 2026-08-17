@@ -23,9 +23,4 @@ namespace nanodb {
     // This is the single call site used throughout HNSW.
     float compute_distance(const float* a, const float* b, size_t dim, DistanceMetric metric);
 
-    // Legacy alias kept for backward compatibility.
-    inline float get_distance(const float* a, const float* b, size_t dim) {
-        return l2_distance(a, b, dim);
-    }
-
 } // namespace nanodb

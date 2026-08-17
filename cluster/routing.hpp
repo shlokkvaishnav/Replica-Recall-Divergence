@@ -18,14 +18,6 @@ inline uint64_t fnv1a_64(const std::string& s) {
     return h;
 }
 
-// Phase 1 routing: plain modulo over a fixed shard count. No virtual nodes,
-// no rebalancing -- adding or removing a shard reshuffles almost every key.
-// This is intentional and temporary. Phase 2 (consistent hashing) replaces
-// this function but reuses fnv1a_64 for the hash ring.
-inline size_t route_shard(const std::string& external_id, size_t num_shards) {
-    return fnv1a_64(external_id) % num_shards;
-}
-
 inline uint64_t well_mixed_hash(const std::string& external_id) {
     uint64_t h = fnv1a_64(external_id);
     return fnv1a_64(std::to_string(h));

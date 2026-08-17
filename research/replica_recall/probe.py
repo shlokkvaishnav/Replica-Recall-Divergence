@@ -23,7 +23,6 @@ not an error.
 from __future__ import annotations
 
 import os
-import subprocess
 import sys
 import tempfile
 
@@ -152,15 +151,6 @@ class ReplicaProbe:
                 return False, []
             out.append(res)
         return True, out
-
-    def alive(self) -> bool:
-        try:
-            resp = self._stub_or_connect().Ping(_pb2.PingRequest(),
-                                                 timeout=self.timeout_s)
-            return bool(resp.ok)
-        except Exception:
-            self._reset()
-            return False
 
     def close(self) -> None:
         self._reset()

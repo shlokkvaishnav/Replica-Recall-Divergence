@@ -28,12 +28,6 @@ namespace nanodb {
             rebuild_index();
         }
 
-        void close_file() {
-            if (file_stream_.is_open()) {
-                file_stream_.close();
-            }
-        }
-
         void save_metadata(int id, const std::string& metadata) {
             if (metadata.empty()) return;
 
@@ -44,9 +38,6 @@ namespace nanodb {
             
             size_t offset = file_stream_.tellp();
             size_t length = metadata.size();
-
-            // Debug Log
-            // std::cout << "[DEBUG] Saving ID=" << id << " Offset=" << offset << " Len=" << length << " Data=" << metadata << "\n";
 
             uint32_t len_32 = static_cast<uint32_t>(length);
             file_stream_.write(reinterpret_cast<char*>(&len_32), sizeof(uint32_t));
