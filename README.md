@@ -24,6 +24,8 @@ A distributed vector database built from first principles in C++17 — no consen
 
 The non-trivial part isn't any one mechanism in isolation — it's making them compose correctly under failures, where the bugs are timing-dependent and only surface under load with random process kills.
 
+That question — what actually happens to a replica under failure — turned into its own research direction: `research/replica_recall/` measures what node-kill chaos does to search quality specifically, on real SIFT1M vectors. Short version: the control plane survives the kill (the demo below shows that); individual replicas silently lose search quality and never recover it, which the demo doesn't show. Full writeup in `research/replica_recall/README.md`, prior-art positioning in `research/RELATED_WORK.md`.
+
 ---
 
 ## The demo: kill the leader
@@ -181,7 +183,7 @@ Measured with Docker Compose on a single host (2 shards × 3 replicas + 3 Raft c
 | Single-node search | **0.15 ms** | |
 | Recall@10 | **95%** | |
 
-<sup>1</sup> 163 vec/s at 8 concurrent clients; 146 vec/s is the reproducible 4-client result from `benchmarks/cluster_benchmark_results.json`. To reproduce: `./cluster.sh up && python3 benchmarks/cluster_benchmark.py`.
+<sup>1</sup> 163 vec/s at 8 concurrent clients; 146 vec/s is the reproducible 4-client result from `benchmarks/cluster_benchmark_results.json`. To reproduce: `./cluster.sh up && python3 benchmarks/cluster_benchmark.py`. That's the Docker-deployment number; `benchmarks/cluster_throughput.py` measures the same thing against native binaries (no Docker layer, no artificial pacing) with `--repeat N` for a median and range instead of a single run — the two aren't comparable numbers, see that script's own docstring for why.
 
 ### Benchmark methodology
 
@@ -189,6 +191,7 @@ Measured with Docker Compose on a single host (2 shards × 3 replicas + 3 Raft c
 - **Warm-up:** 500 vectors inserted before the measurement window opens
 - **Query mix:** random 128-dimensional unit vectors, k=10, `"consistency": "strong"`
 - **Competitor comparisons** (`benchmarks/compare_against_competitors.py`) measure FAISS and hnswlib as direct in-process library calls with no HTTP or replication overhead — an apples-to-oranges comparison against Nano-DB's cluster numbers, but the right baseline for the single-node storage engine
+- **Recall on synthetic data**: both `compare_against_competitors.py` and `benchmarks/benchmark_recall.cpp` generate random synthetic vectors, which suffer distance concentration and depress recall for reasons unrelated to index quality — `benchmark_recall.cpp` says as much in its own comments. `research/replica_recall/` measures recall against real SIFT1M vectors instead (`--dist sift`); see `docs/postmortem-recall-bugs.md` for what synthetic-data recall numbers hid on this project specifically
 
 ### Tail latency in scatter-gather
 
@@ -240,7 +243,7 @@ Grafana at `localhost:3000` (admin/nanodb) with a pre-built dashboard: cluster t
 
 ## Testing
 
-**Unit tests (10):** Raft Figure 8 commit safety (adversarial 5-node scenario + mutation test), log compaction, consistent hash ring distribution, sequential-ID routing, ID map store persistence, concurrent config writes, HNSW correctness, SIMD distance accuracy, and mmap persistence.
+**Unit tests (9):** Raft Figure 8 commit safety (adversarial 5-node scenario + mutation test), log compaction, consistent hash ring distribution, deterministic key hashing, ID map store persistence, concurrent config writes, HNSW correctness, SIMD distance accuracy, and mmap persistence. Separately, `research/replica_recall/test_metrics.py` has 75 offline checks across 13 test functions on the measurement core (no cluster required).
 
 ```bash
 mkdir build && cd build
