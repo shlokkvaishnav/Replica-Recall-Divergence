@@ -45,6 +45,7 @@ from graph_forensics import analyse, load_index, link_quality     # noqa: E402
 
 RUNNER = os.path.join(HERE, "run_experiment.py")
 OUT_JSON = os.path.join(HERE, "forensics_results.json")
+EVENTS_DIR = os.path.join(HERE, "forensics_events")
 
 # Metrics worth a column. Structural ones first, then the semantic one.
 REPORT = [
@@ -79,6 +80,28 @@ def run_one(seed: int, cond: str, duration: int, writers: int,
         print(f"  seed {seed} {cond:<8} FAILED: {' | '.join(tail)}")
         return []
 
+    # events.json records every kill: {"t", "target", "alive_after_restart",
+    # "down_for_s", "restart_count"}. run_experiment.py overwrites its results
+    # dir on every invocation, so without copying this out here, the kill
+    # history behind any given replica's damage is gone before the next run
+    # even starts -- there would be no way to ask "how many times was THIS
+    # replica specifically killed" after the fact. chaos_loop's targets are
+    # drawn from Python's shared global `random`, contended by every thread in
+    # the process, so kill timing is NOT reproducible from the seed alone --
+    # this is the only record that will ever exist of what actually happened.
+    kills_by_target: dict[str, int] = {}
+    events_path = os.path.join(HERE, "results", "events.json")
+    if os.path.exists(events_path):
+        os.makedirs(EVENTS_DIR, exist_ok=True)
+        try:
+            events = json.load(open(events_path))
+            for e in events:
+                kills_by_target[e["target"]] = kills_by_target.get(e["target"], 0) + 1
+            with open(os.path.join(EVENTS_DIR, f"seed{seed}_{cond}.json"), "w") as f:
+                json.dump(events, f, indent=2)
+        except Exception as e:
+            print(f"  (events.json unreadable: {e})")
+
     # The cluster is down now, so the files are quiescent and readable.
     data_dir = os.path.join(ch.RUN_DIR, "data")
     out = []
@@ -91,14 +114,22 @@ def run_one(seed: int, cond: str, duration: int, writers: int,
             _, nodes, _ = load_index(d)
             r.update(link_quality(nodes, sample=sample, seed=seed))
             r.update({"seed": seed, "cond": cond, "replica": name,
-                      "shard": name.split("-")[1] if "-" in name else "?"})
+                      "shard": name.split("-")[1] if "-" in name else "?",
+                      "kill_count": kills_by_target.get(name, 0)})
             out.append(r)
         except Exception as e:
             print(f"  {name}: analysis failed ({e})")
 
     lq = [r.get("link_quality") for r in out if r.get("link_quality") is not None]
+    flag = ""
+    if out:
+        worst = max(out, key=lambda r: r.get("unreachable_from_entry") or 0)
+        if (worst.get("unreachable_from_entry") or 0) > 10:
+            flag = (f"  ** unreachable={worst['unreachable_from_entry']:,} on "
+                   f"{worst['replica']} (killed {worst['kill_count']}x) **")
     print(f"  seed {seed} {cond:<8} ok  {len(out)} replicas  {dt:5.0f}s"
-          + (f"  link_quality {statistics.mean(lq):.4f}" if lq else ""))
+          + (f"  link_quality {statistics.mean(lq):.4f}" if lq else "")
+          + flag)
     return out
 
 
@@ -157,6 +188,50 @@ def report(results: list[dict]) -> None:
             print("  separates, the mechanism is something this does not")
             print("  measure -- report that rather than reaching for another")
             print("  metric until one moves.")
+
+    # Catastrophic disconnection: does it happen to every replica a little,
+    # or rarely and severely to a few? sorted() rather than a mean makes that
+    # distinction visible; a mean alone would hide one huge outlier inside a
+    # sea of zeros exactly the way it did the first time this ran.
+    chaos = [r for r in results if r["cond"] == "chaos"]
+    un = sorted(((r.get("unreachable_from_entry") or 0), r) for r in chaos)
+    if un:
+        print("\n" + "=" * 74)
+        print("Catastrophic disconnection -- distribution, not just the mean")
+        print("=" * 74)
+        vals = [u for u, _ in un]
+        n_zero = sum(1 for u in vals if u == 0)
+        print(f"  {n_zero}/{len(vals)} chaos replicas: zero nodes unreachable "
+              f"from entry (identical to baseline)")
+        worst = un[-3:][::-1]
+        for u, r in worst:
+            if u == 0:
+                break
+            frac = r.get("unreachable_from_entry_frac")
+            print(f"    seed {r['seed']:<12} {r['replica']:<10} "
+                  f"unreachable={u:>7,} ({frac:.1%})  killed {r.get('kill_count', 0)}x  "
+                  f"link_quality={r.get('link_quality', float('nan')):.4f}")
+
+        # kill_count vs damage: killed replicas that stayed intact vs the
+        # ones that didn't tells us whether repeated kills are sufficient, or
+        # whether it takes a kill landing at a specific vulnerable moment.
+        killed = [r for r in chaos if r.get("kill_count", 0) > 0]
+        if killed:
+            intact = [r for r in killed if (r.get("unreachable_from_entry") or 0) == 0]
+            broken = [r for r in killed if (r.get("unreachable_from_entry") or 0) > 10]
+            print(f"\n  of {len(killed)} replicas killed at least once: "
+                  f"{len(intact)} stayed fully reachable, {len(broken)} "
+                  f"suffered major disconnection")
+            if intact:
+                print(f"    kill counts among the intact  : "
+                      f"{sorted(r.get('kill_count', 0) for r in intact)}")
+            if broken:
+                print(f"    kill counts among the broken  : "
+                      f"{sorted(r.get('kill_count', 0) for r in broken)}")
+            if intact and broken and not (set(r.get('kill_count', 0) for r in intact)
+                                          & set(r.get('kill_count', 0) for r in broken)):
+                print("    disjoint kill counts -- being killed N times is not")
+                print("    enough by itself; something about timing matters.")
 
 
 def main() -> int:
