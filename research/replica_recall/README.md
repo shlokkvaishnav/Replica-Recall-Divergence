@@ -197,6 +197,16 @@ Two things to know before trusting the output:
   some far neighbours for navigability — so compare replicas, never the
   absolute number.
 
+**Result so far:** the semantic-degradation hypothesis this tool was built to
+test came back negative — `link_quality` is not distinguishable between
+baseline and chaos across 120 chaos replicas. But one replica out of those
+120, never itself killed, lost reachability to 58.7% of its own graph while
+every structural check on it looked clean. Two follow-up mechanisms were
+tested (a pure-concurrency stress test, and a specific insert-path bug found
+while reading the code) and both were ruled out with clean reproductions.
+Root cause is still open. Full writeup:
+[`docs/postmortem-catastrophic-disconnection.md`](../../docs/postmortem-catastrophic-disconnection.md).
+
 ## The healing test (the decisive one)
 
 A run with faults throughout measures a **steady state**: ongoing damage

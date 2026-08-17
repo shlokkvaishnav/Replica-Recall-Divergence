@@ -11,16 +11,25 @@ damaged replica can be dissected offline with no cluster running:
 
     HEADER_SIZE (64) + id * sizeof(Node) (1056)
 
-The hypothesis this is built to test: insertion writes the node first and links
-it afterwards, so a SIGKILL in between leaves a node that is *present* but that
-nothing points at. Such a node is invisible to search however many times it is
-queried, and no amount of data-level repair would fix it -- the vector is not
-missing. That would explain the whole finding.
+The original hypothesis -- insertion writes the node first and links it
+afterwards, so a SIGKILL in between leaves a node that is present but that
+nothing points at -- turned out wrong. Structural checks (in-degree,
+out-degree, dangling edges) come back clean on 20 of 30 chaos replicas and on
+every replica in a dedicated 16-writer, zero-chaos concurrency stress test.
+What actually happened, once, was far more specific: one replica (never
+itself killed) lost reachability to 58.7% of its own graph while every
+structural check on it looked completely healthy -- see
+docs/postmortem-catastrophic-disconnection.md for the full investigation,
+including two more specific hypotheses that were tested and also ruled out.
+The cause is still open.
 
-The load-bearing metric is therefore in-degree, not out-degree. A node with no
-in-edges and which is not the entry point cannot be reached by any traversal
-from any starting point. That is a proof, not an estimate: it needs no
-assumption about how search descends the layers.
+The load-bearing metric is therefore in-degree AND explicit reachability, not
+just out-degree. A node with no in-edges and which is not the entry point
+cannot be reached by any traversal from any starting point -- that is a
+proof, not an estimate, and needs no assumption about how search descends the
+layers. But the observed damage shows in-degree alone is not enough either:
+the unreachable nodes in the one damaged replica found so far all had real
+in-edges from each other, just none from the entry point's component.
 
     python research/replica_recall/graph_forensics.py chaos_run/data/shard-0-0
     python research/replica_recall/graph_forensics.py chaos_run/data --compare
