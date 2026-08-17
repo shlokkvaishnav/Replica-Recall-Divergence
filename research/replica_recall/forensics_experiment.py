@@ -194,17 +194,23 @@ def report(results: list[dict]) -> None:
     # distinction visible; a mean alone would hide one huge outlier inside a
     # sea of zeros exactly the way it did the first time this ran.
     chaos = [r for r in results if r["cond"] == "chaos"]
-    un = sorted(((r.get("unreachable_from_entry") or 0), r) for r in chaos)
+    # key= rather than sorting raw (value, dict) tuples: sorted() falls back to
+    # comparing the second element on a tie, and ties on 0 are the common case
+    # here (most replicas are undamaged) -- dicts aren't orderable, so that
+    # crashed the entire report after the headline table already printed the
+    # thing this section exists to explain.
+    un = sorted(chaos, key=lambda r: r.get("unreachable_from_entry") or 0)
     if un:
         print("\n" + "=" * 74)
         print("Catastrophic disconnection -- distribution, not just the mean")
         print("=" * 74)
-        vals = [u for u, _ in un]
+        vals = [r.get("unreachable_from_entry") or 0 for r in un]
         n_zero = sum(1 for u in vals if u == 0)
         print(f"  {n_zero}/{len(vals)} chaos replicas: zero nodes unreachable "
               f"from entry (identical to baseline)")
         worst = un[-3:][::-1]
-        for u, r in worst:
+        for r in worst:
+            u = r.get("unreachable_from_entry") or 0
             if u == 0:
                 break
             frac = r.get("unreachable_from_entry_frac")
