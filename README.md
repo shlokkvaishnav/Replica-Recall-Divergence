@@ -169,21 +169,38 @@ To verify yourself:
 
 ## Performance
 
-Measured with Docker Compose on a single host (2 shards × 3 replicas + 3 Raft coordinators, Docker bridge network). All cluster numbers include HTTP and replication overhead.
+**A caveat before the numbers: most of this table has never been re-measured
+since it was first written, and one row (single-node insert) traces to a
+benchmark file whose own hardware-documentation comment was never filled in
+— see below.** The rows below marked *(native, verified 2026-08)* were
+re-run against the current build on a 4-thread i3-1115G4 laptop; treat them
+as a lower bound on what this code can do, not a ceiling — they were run on
+noticeably weaker hardware than whatever originally produced the numbers
+they replace or sit next to.
+
+Docker numbers below were measured with Docker Compose on a single host
+(2 shards × 3 replicas + 3 Raft coordinators, Docker bridge network) and were
+not re-run this pass. All cluster numbers include HTTP and replication overhead.
 
 | Metric | Value | Notes |
 |--------|-------|-------|
-| Cluster insert throughput | **146 vec/s** | 4 concurrent clients, quorum writes<sup>1</sup> |
-| Search latency p50 | **5.9 ms** | scatter-gather across 2 shards |
-| Search latency p95 | **10.4 ms** | |
-| Search latency p99 | **27.9 ms** | slowest shard gates the result — see [tail latency](#tail-latency-in-scatter-gather) |
+| Cluster insert throughput (Docker) | **146 vec/s** | 4 concurrent clients, quorum writes<sup>1</sup> |
+| Cluster insert throughput (native) | **213.5 vec/s** *(median, range 191.5–400.3, 5 reps)* | no Docker layer, `--repeat 5` — see footnote 1 |
+| Search latency p50 (Docker) | **5.9 ms** | scatter-gather across 2 shards, 167k-vector index |
+| Search latency p95 (Docker) | **10.4 ms** | |
+| Search latency p99 (Docker) | **27.9 ms** | slowest shard gates the result — see [tail latency](#tail-latency-in-scatter-gather) |
+| Search latency p50/p99 (native) | **~39 ms / ~102 ms** *(median across 5 reps, ~6–12k-vector index)* | smaller index, still slower — hardware difference, not a regression; see footnote 1 |
 | Failover recovery | **0.5 s** | primary killed, replica promoted by element count |
 | Raft leader election | **< 1 s** | randomized 300–600 ms timeouts |
-| Single-node insert | **6,500 TPS** | 8 threads, no replication, no HTTP overhead |
-| Single-node search | **0.15 ms** | |
-| Recall@10 | **95%** | |
+| Single-node insert | **510–1,103 TPS** *(native, verified 2026-08)* | peaks at 2 threads, *declines* to 728 at 8 — see footnote 2 |
+| Single-node search | **not currently measured** | `benchmarks/benchmark_throughput.cpp` reports no search-latency number; nothing else in the repo does either |
+| Recall@10 | **≤ 81.6%** on synthetic data *(verified 2026-08)*, corpus-dependent | see footnote 3 |
 
-<sup>1</sup> 163 vec/s at 8 concurrent clients; 146 vec/s is the reproducible 4-client result from `benchmarks/cluster_benchmark_results.json`. To reproduce: `./cluster.sh up && python3 benchmarks/cluster_benchmark.py`. That's the Docker-deployment number; `benchmarks/cluster_throughput.py` measures the same thing against native binaries (no Docker layer, no artificial pacing) with `--repeat N` for a median and range instead of a single run — the two aren't comparable numbers, see that script's own docstring for why.
+<sup>1</sup> 163 vec/s at 8 concurrent clients; 146 vec/s is the reproducible 4-client Docker result from `benchmarks/cluster_benchmark_results.json` (`./cluster.sh up && python3 benchmarks/cluster_benchmark.py`). The native row is `benchmarks/cluster_throughput.py --repeat 5`, no Docker layer, no artificial pacing, median with explicit range rather than a point estimate — a single run on this host showed ~60% spread. Docker and native are different deployments and the two throughput numbers aren't directly comparable, but for what it's worth native came out faster (less network-stack overhead); native search came out much slower, most likely explained by weaker hardware (see footnote 2) rather than the deployment difference, since a smaller index should search faster, not slower.
+
+<sup>2</sup> `benchmarks/benchmark_throughput.cpp`'s own header has a line reading `Hardware used (fill in before publishing): [e.g. Intel Core i7-12700H, 14 cores, 20 threads]` — an example placeholder, never actually filled in. Whatever number was previously quoted here (6,500 TPS) was measured on unknown hardware that was never documented. The 510–1,103 TPS range is what this exact binary reports today, on a machine with 4 logical threads total — which also explains the throughput *drop* at 8 threads (oversubscription).
+
+<sup>3</sup> `benchmarks/benchmark_recall.cpp` on 100k synthetic vectors, swept over `ef_search` — recall is flat at 46.3% for `ef_search` 10–100, then rises to 81.6% at `ef_search=500`. It does not reach 95% anywhere in the sweep. Synthetic uniform data suffers distance concentration, which is exactly what depresses recall here for reasons unrelated to index quality — see "Recall on synthetic data" in Benchmark methodology below, and `docs/postmortem-recall-bugs.md`. `research/replica_recall/` measures recall against real SIFT1M vectors instead (`--dist sift`) and gets meaningfully higher, corpus-realistic numbers; see that package's README for current figures.
 
 ### Benchmark methodology
 
