@@ -127,10 +127,16 @@ the only node in the graph), then insert 5,000 more vectors normally.
 nodes. The entry point had migrated away from the duplicated node multiple
 times by the end, exactly as expected, and nothing was ever left behind.
 
-**Verdict: ruled out.** The bug is real and worth fixing on its own merits —
-silently overwriting a vector's stored data on a duplicate insert is a
-correctness problem regardless of whether it explains this — but it is not
-the mechanism.
+**Verdict: ruled out as the mechanism, but real.** Silently overwriting a
+vector's stored data on a duplicate insert is a correctness problem
+regardless of whether it explains this. Fixed separately: a duplicate insert
+of a still-live external_id now succeeds as a no-op if the incoming data is
+identical to what's stored (the shape of a legitimate retry — `RemoveShard`'s
+rebalance path is explicitly documented as idempotent and can re-migrate a
+key that already landed) and is rejected with a clear error if the data
+differs, instead of silently replacing what was there. Re-insert after an
+actual delete is unaffected. Verified end to end through the real
+HTTP → coordinator → quorum → gRPC → shard path, `ctest` 9/9.
 
 ## Where this leaves it
 
