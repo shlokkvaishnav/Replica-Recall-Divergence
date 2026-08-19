@@ -548,6 +548,8 @@ When Coordinator A (stale) tries to write to Replica 0 (old primary), it attache
 
 **Files:** `cluster/raft_node.hpp`, `cluster/raft_log.hpp`, `cluster/raft_state.hpp`, `cluster/raft_config.hpp`, `proto/raft.proto`
 
+![Raft state machine](images/raft-state-machine.png)
+
 ### Why consensus for the control plane
 
 The cluster maintains state that all coordinators must agree on: which nodes own which shard, who is currently the primary for each shard, and what happened during the last failover. Without consensus:
@@ -1001,6 +1003,10 @@ This is the standard "write-rename" pattern used by databases, config management
 
 **File:** `cluster/metrics_registry.hpp`
 
+![Grafana Dashboard](images/grafana.png)
+
+Raft term jumps 455→456 as a new coordinator wins an election, with shard failovers=0 and insert failures=0 throughout — the Raft layer absorbing a leader kill with zero data-plane disruption.
+
 ### Lock-free metrics primitives
 
 **Counter (monotonically increasing):**
@@ -1136,6 +1142,56 @@ These are all well within the "body" of the distribution, which is relatively fl
 When sizing a cluster, the relevant question is not "what's the p99 of a single shard search?" but "what's the p{99^{1/N}} of a single shard search?" For a 32-shard cluster, every query's p99 is determined by the p99.97 per-shard tail — well into the regime where rare events (GC pauses, NUMA misses, kernel scheduling jitter) dominate.
 
 The mitigations production vector databases use: hedged requests (send to two replicas, return whichever answers first), timeout-and-skip (return partial results if a shard exceeds a deadline), and horizontal scaling within shards (more replicas → load-balance reads → lower per-shard queueing).
+
+### Measured, then projected
+
+Measured against a live 167k-vector, 2-shard cluster, then projected to higher shard counts using the order-statistics formula above:
+
+| Shards | p50 (ms) | p95 (ms) | p99 (ms) | p99.9 (ms) | Notes |
+|--------|----------|----------|----------|------------|-------|
+| 1 | 5.5 | 10.1 | 19.9 | 26.2 | single shard, no fan-out |
+| **2** | **5.5** | **10.1** | **19.9** | **26.2** | **current cluster (measured)** |
+| 4 | 6.8 | 16.1 | 25.3 | 26.5 | modeled |
+| 8 | 8.3 | 23.0 | 26.1 | 26.5 | modeled |
+| 16 | 11.0 | 24.5 | 26.3 | 26.6 | modeled |
+
+The p99 ceiling (~26ms) reflects the hard maximum in this Docker-on-single-host setup where intra-host network jitter is minimal. On a real multi-machine deployment with network-level tail latency, the effect is more pronounced — the modeled values understate the real divergence at scale.
+
+Reproduce: `python3 benchmarks/portfolio/tail_latency_analysis.py` (requires cluster running).
+
+---
+
+## 17. Performance Benchmarks
+
+A caveat before the numbers: most of this table has never been re-measured since it was first written, and one row (single-node insert) traces to a benchmark file whose own hardware-documentation comment was never filled in — see footnote 2. Rows marked *(native, verified 2026-08)* were re-run against the current build on a 4-thread i3-1115G4 laptop; treat them as a lower bound on what this code can do, not a ceiling — they ran on noticeably weaker hardware than whatever originally produced the numbers they sit next to. Docker numbers were measured with Docker Compose on a single host (2 shards × 3 replicas + 3 Raft coordinators, Docker bridge network) and were not re-run this pass. All cluster numbers include HTTP and replication overhead.
+
+| Metric | Value | Notes |
+|--------|-------|-------|
+| Cluster insert throughput (Docker) | **146 vec/s** | 4 concurrent clients, quorum writes<sup>1</sup> |
+| Cluster insert throughput (native) | **213.5 vec/s** *(median, range 191.5–400.3, 5 reps)* | no Docker layer, `--repeat 5` — see footnote 1 |
+| Search latency p50 (Docker) | **5.9 ms** | scatter-gather across 2 shards, 167k-vector index |
+| Search latency p95 (Docker) | **10.4 ms** | |
+| Search latency p99 (Docker) | **27.9 ms** | slowest shard gates the result — see [§15, Tail Latency in Scatter-Gather](#15-tail-latency-in-scatter-gather) |
+| Search latency p50/p99 (native) | **~39 ms / ~102 ms** *(median across 5 reps, ~6–12k-vector index)* | smaller index, still slower — hardware difference, not a regression; see footnote 1 |
+| Failover recovery | **0.5 s** | primary killed, replica promoted by element count |
+| Raft leader election | **< 1 s** | randomized 300–600 ms timeouts |
+| Single-node insert | **510–1,103 TPS** *(native, verified 2026-08)* | peaks at 2 threads, *declines* to 728 at 8 — see footnote 2 |
+| Single-node search | **not currently measured** | `benchmarks/portfolio/benchmark_throughput.cpp` reports no search-latency number; nothing else in the repo does either |
+| Recall@10 | **≤ 81.6%** on synthetic data *(verified 2026-08)*, corpus-dependent | see footnote 3 |
+
+<sup>1</sup> 163 vec/s at 8 concurrent clients; 146 vec/s is the reproducible 4-client Docker result from `benchmarks/portfolio/cluster_benchmark_results.json` (`./demo/cluster.sh up && python3 benchmarks/portfolio/cluster_benchmark.py`). The native row is `benchmarks/portfolio/cluster_throughput.py --repeat 5`, no Docker layer, no artificial pacing, median with explicit range rather than a point estimate — a single run on this host showed ~60% spread. Docker and native are different deployments and the two throughput numbers aren't directly comparable, but for what it's worth native came out faster (less network-stack overhead); native search came out much slower, most likely explained by weaker hardware (see footnote 2) rather than the deployment difference, since a smaller index should search faster, not slower.
+
+<sup>2</sup> `benchmarks/portfolio/benchmark_throughput.cpp`'s own header has a line reading `Hardware used (fill in before publishing): [e.g. Intel Core i7-12700H, 14 cores, 20 threads]` — an example placeholder, never actually filled in. Whatever number was previously quoted here (6,500 TPS) was measured on unknown hardware that was never documented. The 510–1,103 TPS range is what this exact binary reports today, on a machine with 4 logical threads total — which also explains the throughput *drop* at 8 threads (oversubscription).
+
+<sup>3</sup> `benchmarks/research/benchmark_recall.cpp` on 100k synthetic vectors, swept over `ef_search` — recall is flat at 46.3% for `ef_search` 10–100, then rises to 81.6% at `ef_search=500`. It does not reach 95% anywhere in the sweep. Synthetic uniform data suffers distance concentration, which is exactly what depresses recall here for reasons unrelated to index quality — see [`docs/postmortems/recall-bugs.md`](../postmortems/recall-bugs.md). `research/replica_recall/` measures recall against real SIFT1M vectors instead (`--dist sift`) and gets meaningfully higher, corpus-realistic numbers — this is the number to trust; see that package's README for current figures.
+
+### Benchmark methodology
+
+- **Hardware:** all nodes on a single host via Docker Compose (Docker bridge network round-trip: ~0.1 ms)
+- **Warm-up:** 500 vectors inserted before the measurement window opens
+- **Query mix:** random 128-dimensional unit vectors, k=10, `"consistency": "strong"`
+- **Competitor comparisons** (`benchmarks/portfolio/compare_against_competitors.py`) measure FAISS and hnswlib as direct in-process library calls with no HTTP or replication overhead — an apples-to-oranges comparison against Nano-DB's cluster numbers, but the right baseline for the single-node storage engine
+- **Recall on synthetic data**: both `compare_against_competitors.py` and `benchmarks/research/benchmark_recall.cpp` generate random synthetic vectors, which suffer distance concentration and depress recall for reasons unrelated to index quality — `benchmark_recall.cpp` says as much in its own comments. `research/replica_recall/` measures recall against real SIFT1M vectors instead (`--dist sift`) — this is the origin story of the whole research direction this repository exists for
 
 ---
 
