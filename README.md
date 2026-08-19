@@ -1,11 +1,11 @@
 <div align="center">
 
-# nano-db-replica-recall
+# Nano-DB-Replica-Recall
 
 [![C++17](https://img.shields.io/badge/C%2B%2B-17-orange?style=flat-square&logo=cplusplus)](https://en.cppreference.com/w/cpp/17)
-[![Build](https://img.shields.io/github/actions/workflow/status/shlokkvaishnav/nano-db-replica-recall/ci.yml?style=flat-square&label=build)](https://github.com/shlokkvaishnav/nano-db-replica-recall/actions)
+[![Build](https://img.shields.io/github/actions/workflow/status/shlokkvaishnav/Nano-DB-Replica-Recall/ci.yml?style=flat-square&label=build)](https://github.com/shlokkvaishnav/Nano-DB-Replica-Recall/actions)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue?style=flat-square)](LICENSE)
-[![Docker](https://img.shields.io/badge/docker-ready-2496ED?style=flat-square&logo=docker&logoColor=white)](https://github.com/shlokkvaishnav/nano-db-replica-recall/pkgs/container/nano-db)
+[![Docker](https://img.shields.io/badge/docker-ready-2496ED?style=flat-square&logo=docker&logoColor=white)](https://github.com/shlokkvaishnav/Nano-DB-Replica-Recall/pkgs/container/nano-db)
 
 **Does search quality silently diverge across replicas of an approximate index under node failure — and does it ever come back?**
 
@@ -194,8 +194,8 @@ Raft term jumps 455→456 as coordinator-1 wins the election; shard failovers=0 
 ### Quick start
 
 ```bash
-git clone --recurse-submodules https://github.com/shlokkvaishnav/nano-db-replica-recall.git
-cd nano-db-replica-recall
+git clone --recurse-submodules https://github.com/shlokkvaishnav/Nano-DB-Replica-Recall.git
+cd Nano-DB-Replica-Recall
 ./demo/cluster.sh up
 ```
 
