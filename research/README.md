@@ -21,9 +21,16 @@ Full contract, current claim, non-claims, and required next experiments: see the
 | Catastrophic single-replica disconnection | [`../docs/postmortems/catastrophic-disconnection.md`](../docs/postmortems/catastrophic-disconnection.md) | Exploratory | **Open** — two hypotheses ruled out, root cause unknown |
 | Correctness criterion for replicated approximate indexes (Layer 2) | — | — | Not started |
 | Production detection without ground truth (Layer 3) | `replica_recall/`'s `loo_agreement` detector | Confirmatory (in progress) | Hypothesis under test, not yet confirmed |
+| Cross-system replication | branch `research/cross-system-replication` | Confirmatory (pre-registered) | **Not started** — spec committed, no implementation or results yet |
 
 **Confirmatory** means the question and comparison design were fixed before the relevant run. **Exploratory** means the finding was noticed first and investigated after — reported as such rather than reframed as planned.
 
 ## Reproducing
 
 See the top-level [README's reproduction section](../README.md#reproducing-the-experiment) for the short version, or [`replica_recall/README.md`](replica_recall/README.md) for full methodology, every design decision and why, and known limits.
+
+## Working on this research
+
+Branches isolate uncertainty; `main` holds only validated state. Before starting a substantial new branch, copy [`SPEC_TEMPLATE.md`](SPEC_TEMPLATE.md) and fill in the research question, hypothesis, and design *before* implementing or looking at results. Full policy — branch naming, isolation rules, merge criteria, negative-results handling, commit conventions: [`GIT_WORKFLOW.md`](GIT_WORKFLOW.md). Why past decisions were made the way they were: [`DECISION_LOG.md`](DECISION_LOG.md).
+
+**Open branch, matching the experiment index above:** [`research/cross-system-replication`](https://github.com/shlokkvaishnav/Nano-DB-Replica-Recall/tree/research/cross-system-replication) — the pre-registered spec for testing whether the replica-recall divergence finding generalizes beyond this one system, per this index's Open research questions #1. No implementation or results yet; that's the point of committing the spec first.
