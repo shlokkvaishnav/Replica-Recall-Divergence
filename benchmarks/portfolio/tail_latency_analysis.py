@@ -6,7 +6,7 @@ Measures search latency against the running 2-shard cluster and models what
 tail latency would look like at 1, 4, and 8 shards using order statistics.
 
 Requires the cluster to be running:
-    ./cluster.sh up
+    ./demo/cluster.sh up
 
 The key insight: in a scatter-gather fan-out, the coordinator waits for ALL
 shards before it can merge and return results. So the end-to-end latency for
@@ -29,7 +29,7 @@ These push into the far tail of the per-shard distribution, which is why p99
 worsens faster than p50 as you add shards.
 
 Usage:
-    python3 benchmarks/tail_latency_analysis.py [--queries N]
+    python3 benchmarks/portfolio/tail_latency_analysis.py [--queries N]
 """
 
 import argparse
@@ -107,7 +107,7 @@ def main():
               f"{len(stats.get('replicas', []))} replicas")
     except Exception:
         print("ERROR: Cannot reach cluster at http://localhost:8080")
-        print("Run:  ./cluster.sh up")
+        print("Run:  ./demo/cluster.sh up")
         raise SystemExit(1)
 
     print()

@@ -4,7 +4,7 @@ demo_chaos.py
 
 Narrated demo of Nano-DB fault tolerance. Requires the cluster to be running:
 
-    ./cluster.sh up
+    ./demo/cluster.sh up
 
 What it does:
   1. Inserts 100 vectors with 4 concurrent writers, tracking confirmed IDs.
@@ -124,7 +124,7 @@ def main():
     leader_info = find_leader()
     if leader_info is None:
         print("ERROR: No Raft leader found. Is the cluster running?")
-        print("       Run:  ./cluster.sh up")
+        print("       Run:  ./demo/cluster.sh up")
         sys.exit(1)
 
     leader_id, leader_url, leader_term = leader_info

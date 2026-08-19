@@ -5,9 +5,7 @@ build/
 *.pdb
 data/
 chaos_run/
-docs/INTERNALS.md
 scratch_cmake.txt
-Dockerfile.test
 *.bin
 *.ndb
 __pycache__/

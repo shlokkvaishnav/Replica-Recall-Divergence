@@ -344,6 +344,6 @@ Recorded for reference; writing the paper is not currently in scope.
 | **DBTest** (SIGMOD workshop) | Natural home for the harness/methodology contribution | — |
 
 Pragmatic path: arXiv preprint plus an engineering writeup
-(`docs/postmortem-recall-bugs.md` is already most of one). The area is moving
+(`docs/postmortems/recall-bugs.md` is already most of one). The area is moving
 fast enough — several 2026 arXiv entries — that preprint priority matters more
 than usual.

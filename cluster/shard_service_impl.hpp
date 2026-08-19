@@ -42,7 +42,7 @@ public:
         // that already landed on a prior attempt. Insert() used to run
         // unconditionally either way, silently overwriting the stored vector
         // and rewiring its links with no warning -- see
-        // docs/postmortem-catastrophic-disconnection.md for why that turned
+        // docs/postmortems/catastrophic-disconnection.md for why that turned
         // out not to be the cause of the graph damage investigated there, but
         // it's a real correctness problem regardless. Same data now succeeds
         // as a no-op (what a migration retry actually looks like); different

@@ -19,7 +19,7 @@ every replica in a dedicated 16-writer, zero-chaos concurrency stress test.
 What actually happened, once, was far more specific: one replica (never
 itself killed) lost reachability to 58.7% of its own graph while every
 structural check on it looked completely healthy -- see
-docs/postmortem-catastrophic-disconnection.md for the full investigation,
+docs/postmortems/catastrophic-disconnection.md for the full investigation,
 including two more specific hypotheses that were tested and also ruled out.
 The cause is still open.
 
