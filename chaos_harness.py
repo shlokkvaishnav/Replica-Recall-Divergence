@@ -2,7 +2,7 @@
 """
 chaos_harness.py
 
-Orchestrates a real Distributed-Nano-DB cluster (2 shards x 3 replicas,
+Orchestrates a real Nano-DB cluster (2 shards x 3 replicas,
 3 Raft coordinators), runs a continuous write workload while randomly
 killing and restarting processes, and validates invariants throughout:
 

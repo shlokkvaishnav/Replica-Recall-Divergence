@@ -205,7 +205,7 @@ every structural check on it looked clean. Two follow-up mechanisms were
 tested (a pure-concurrency stress test, and a specific insert-path bug found
 while reading the code) and both were ruled out with clean reproductions.
 Root cause is still open. Full writeup:
-[`docs/postmortem-catastrophic-disconnection.md`](../../docs/postmortem-catastrophic-disconnection.md).
+[`docs/postmortems/catastrophic-disconnection.md`](../../docs/postmortems/catastrophic-disconnection.md).
 
 ## The healing test (the decisive one)
 

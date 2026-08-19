@@ -1,0 +1,21 @@
+FROM ubuntu:24.04
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential cmake git \
+    protobuf-compiler protobuf-compiler-grpc \
+    libprotobuf-dev libgrpc++-dev libgrpc-dev \
+    libomp-dev pkg-config python3 && \
+    rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+COPY . .
+
+# First, build the C++ project
+RUN rm -rf build && mkdir build && cd build && \
+    cmake .. -DCMAKE_BUILD_TYPE=Release \
+             -DNANODB_BUILD_PYTHON=OFF \
+             -DNANODB_BUILD_SERVER=OFF \
+             -DNANODB_BUILD_CLUSTER=ON && \
+    cmake --build . -j$(nproc)
+
+# Then run all tests
+CMD ["bash", "-c", "cd build && ctest --output-on-failure && cd .. && python3 chaos_harness.py --duration 60"]

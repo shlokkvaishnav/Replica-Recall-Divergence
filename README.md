@@ -1,37 +1,146 @@
 <div align="center">
 
-# Nano-DB
+# nano-db-replica-recall
 
 [![C++17](https://img.shields.io/badge/C%2B%2B-17-orange?style=flat-square&logo=cplusplus)](https://en.cppreference.com/w/cpp/17)
-[![Build](https://img.shields.io/github/actions/workflow/status/shlokkvaishnav/Nano-DB/ci.yml?style=flat-square&label=build)](https://github.com/shlokkvaishnav/Nano-DB/actions)
+[![Build](https://img.shields.io/github/actions/workflow/status/shlokkvaishnav/nano-db-replica-recall/ci.yml?style=flat-square&label=build)](https://github.com/shlokkvaishnav/nano-db-replica-recall/actions)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue?style=flat-square)](LICENSE)
-[![Docker](https://img.shields.io/badge/docker-ready-2496ED?style=flat-square&logo=docker&logoColor=white)](https://github.com/shlokkvaishnav/Nano-DB/pkgs/container/nano-db)
+[![Docker](https://img.shields.io/badge/docker-ready-2496ED?style=flat-square&logo=docker&logoColor=white)](https://github.com/shlokkvaishnav/nano-db-replica-recall/pkgs/container/nano-db)
 
-**A Raft-replicated vector database, built from scratch in C++17.**
-
-> I built a 3-node Raft cluster backed by a custom HNSW engine to find out what actually happens when you kill the leader mid-write.
-> Answer: the cluster re-elects in under a second and zero confirmed writes are dropped.
+**Does search quality silently diverge across replicas of an approximate index under node failure — and does it ever come back?**
 
 </div>
 
 ---
 
-## What this is
+## Research question
 
-A distributed vector database built from first principles in C++17 — no consensus library, no managed queue, no distributed key-value store. Every distributed systems primitive here is implemented from scratch: the Raft log, the quorum write protocol, the consistent hash ring, the epoch fence.
+Does node-failure chaos cause measurable, replica-level search-quality divergence in a replicated HNSW-based vector database; does that divergence persist after full cluster recovery; and can a ground-truth-free peer-agreement signal detect the degraded replica?
 
-**If you need a production vector database, use [Qdrant](https://qdrant.tech) or [Milvus](https://milvus.io).** This project exists to understand what's inside them. Raft consensus, quorum writes, and scatter-gather fan-out are the mechanisms that make Qdrant work; this codebase implements the same primitives from scratch to make them inspectable, testable, and breakable.
+## Why this matters
 
-The non-trivial part isn't any one mechanism in isolation — it's making them compose correctly under failures, where the bugs are timing-dependent and only surface under load with random process kills.
+An exact key-value store that loses a row returns *not found* — an observable event a consistency checker can flag. An approximate nearest-neighbour index that loses vectors, or whose graph degrades, still returns *k* plausible-looking neighbours. Nothing about the response says anything is wrong. **Approximation converts data loss into silence.** No published Jepsen-style analysis has ever targeted a vector database; no streaming-ANN benchmark injects node failure; no production anti-entropy mechanism (Weaviate's hash-tree replication, Vespa's checksummed reconciliation, Dynamo/Cassandra Merkle repair) can be pointed at an ANN graph, because two correct HNSW graphs over identical data differ bit-for-bit. Full positioning against prior work: [`research/RELATED_WORK.md`](research/RELATED_WORK.md).
 
-That question — what actually happens to a replica under failure — turned into its own research direction: `research/replica_recall/` measures what node-kill chaos does to search quality specifically, on real SIFT1M vectors. Short version: the control plane survives the kill (the demo below shows that); individual replicas silently lose search quality and never recover it, which the demo doesn't show. Full writeup in `research/replica_recall/README.md`, prior-art positioning in `research/RELATED_WORK.md`.
+## What we investigate
+
+`research/replica_recall/` runs a controlled node-kill chaos protocol against a live cluster and probes each replica directly (bypassing the coordinator's scatter-gather, which would merge replicas and hide the divergence). It decomposes "the search is bad" into three ground-truth-backed measurements that move independently — `index_recall` (graph quality, data held constant), `completeness` (data content, no search involved), `e2e_recall` (what a client actually experiences) — plus a fourth, `agreement`, computed with **no ground truth**, to test whether peer disagreement can substitute for it. A quiesce protocol (stop chaos, keep watching) then separates *transient replication lag* from *permanent, unrecovered loss*.
+
+## Current findings
+
+**ESTABLISHED** — supported directly by the experiments in this repo:
+> On this system (nano-db: 2 shards × 3 replicas, from-scratch C++ HNSW + Raft), under node-kill chaos on real SIFT1M data (5 seeds), `index_recall` and `completeness` both degrade measurably and statistically significantly versus a no-chaos baseline (exact Mann-Whitney at the n=5 floor, p = 0.0079). Independently-built healthy replicas agree to 1e-4, so ordinary ANN nondeterminism does not explain the gap. Missing data has not returned in any observed post-recovery window.
+
+**HYPOTHESIS** — under active investigation, not yet confirmed:
+> That a ground-truth-free peer-agreement statistic (`loo_agreement`) can identify the degraded replica above chance, making it usable as a production detector for a failure mode that is currently invisible. That this failure mode generalizes beyond this one implementation.
+
+**OPEN** — unresolved questions this repo does not answer:
+> The root cause of why `index_recall` degrades under chaos. A dedicated forensic tool (`graph_forensics.py`) found no average difference in neighbour-list quality between baseline and chaos replicas — except one replica, never itself killed, that lost reachability to 58.7% of its own graph while every structural check on it looked clean. Two specific hypotheses were tested and ruled out with clean reproductions; the actual mechanism is still unknown. Full writeup: [`docs/postmortems/catastrophic-disconnection.md`](docs/postmortems/catastrophic-disconnection.md). Whether the divergence effect scales with corpus size is also untested.
+
+**DO NOT CLAIM** — statements this evidence does not support:
+> "Approximate indexes have no observable correctness criterion under replication" as a general claim (true as a motivating intuition, unproven beyond n=1 system). "Vector databases silently lose data" in general (Milvus #37703 shows a genuinely *loud* failure — the honest claim is that approximation *permits* silence, not that it's universal). "No vector DB repairs missing data" (Weaviate/Vespa do, at the object level — the gap is that object-level repair cannot see graph-level damage). "We understand why recall degrades" (mechanism is open, see above). Anything implying this generalizes to Qdrant, Milvus, Weaviate, or production deployments — untested.
+
+## Methodology, in brief
+
+- **Probes bypass the coordinator** — direct gRPC calls to each replica, so scatter-gather can't average the divergence away.
+- **A settling window** (default 2s) prevents normal replication lag from being counted as loss.
+- **A baseline-first protocol** — every chaos run is compared against a no-fault run on the same corpus, because HNSW insertion order alone produces some cross-replica disagreement even when nothing is broken.
+- **Corpus choice is load-bearing.** Uniform-random vectors suffer distance concentration and hide the effect entirely (p = 0.31); real SIFT1M data separates cleanly (p = 0.0079). A benchmark built on synthetic data would have concluded there was nothing to find.
+- **The seed sweep is what's reported**, not a single run — an exact two-sided Mann-Whitney U test compares 5 seeds per condition.
+
+Full methodology, every design decision and why, known limits: [`research/replica_recall/README.md`](research/replica_recall/README.md).
+
+## Repository structure
+
+```
+research/                    the research: methodology, experiments, findings
+  README.md                  research contract + experiment index
+  RELATED_WORK.md            literature positioning, what's already claimed by others
+  replica_recall/            Layer 1 — the measurement harness (see its own README)
+    RESULTS.md               raw-data status (currently unpopulated — see below)
+
+docs/
+  postmortems/                two historical investigations that fed the research
+    recall-bugs.md            how the original recall-measurement bugs were found
+    catastrophic-disconnection.md   the open 58.7%-loss investigation
+  architecture/               reference material for the experimental system itself
+    INTERNALS.md              Raft / HNSW / storage engine internals
+    images/
+
+benchmarks/
+  research/                  benchmark_recall.cpp — load-bearing: the tool whose
+                              46% recall reading triggered the recall-bug investigation
+  portfolio/                 general perf benchmarks, not part of the research findings
+
+demo/                        chaos-tolerance demo (cluster.sh, demo_chaos.py) —
+                              showcases the system, not the research
+
+cluster/, include/, src/, proto/, tests/    the experimental system (Raft + HNSW +
+                                             gRPC replication) — infrastructure the
+                                             research runs on, not the contribution
+```
+
+`cluster/`, `include/`, `src/`, `proto/`, and `tests/` implement nano-db, the vector database this research measures. **Nano-DB is the experimental system, not the research contribution** — the contribution is the measurement methodology and findings in `research/`.
+
+## Reproducing the experiment
+
+Requires Linux with the cluster binaries built (the harness launches processes directly; no Docker).
+
+```bash
+pip install grpcio grpcio-tools numpy
+cmake -B build -DCMAKE_BUILD_TYPE=Release -DNANODB_BUILD_CLUSTER=ON
+cmake --build build -j$(nproc)
+
+python research/replica_recall/run_experiment.py --duration 180 --no-chaos   # baseline
+mv research/replica_recall/results research/replica_recall/results_baseline
+python research/replica_recall/run_experiment.py --duration 300              # chaos
+
+python research/replica_recall/analyze.py
+```
+
+For the full seed sweep this project's numbers are reported from, corpus choice, the quiesce/healing protocol, and graph forensics: [`research/replica_recall/README.md`](research/replica_recall/README.md).
+
+## Current results
+
+The numbers in **Current findings** above come from a 5-seed sweep on real SIFT1M data. **Raw per-seed results are not currently committed to this repository** — the harness requires Linux and built cluster binaries, and has not been (re-)run in every development environment this project has used. [`research/replica_recall/RESULTS.md`](research/replica_recall/RESULTS.md) documents this gap explicitly and gives the exact commands to regenerate the data. No numbers here are backfilled or estimated.
+
+## Limitations
+
+Single system, single from-scratch implementation — not yet shown to generalize (the single biggest open question). 5 seeds, which sits at the exact statistical floor for the rank test used (p = 0.0079 is the smallest attainable value at n=5, so it indicates the groups separate completely rather than that the effect is large). Ground truth is brute-force, practical only to ~10⁵–10⁶ vectors — a mechanism study, not a scale study. `chaos_harness.py` uses SIGKILL, which does not lose dirty mmap pages — machine-level crash consistency is a separate, unaddressed gap. Full list: the "Known limits" section of [`research/replica_recall/README.md`](research/replica_recall/README.md#known-limits).
+
+## Open research questions / next experiments
+
+1. **Cross-system replication** (highest priority) — point the same probe/decompose/quiesce protocol at a second real vector database (Qdrant or Weaviate). This is the step that would turn a measurement of one system into a contribution about the field.
+2. **Root-cause closure** on the 58.7%-loss anomaly.
+3. **Larger seed count or bootstrap confidence intervals**, beyond the n=5 statistical floor.
+4. **Scale sensitivity** beyond the current brute-force ground-truth cap.
+5. **Detector robustness** — does `loo_agreement` still work against non-pinned, realistic query traffic?
+
+## Related work
+
+The closest prior art is Wang et al.'s *Towards Reliable Vector Database Management Systems* (arXiv:2502.20812), which names the ANN "oracle problem" but never discusses replication or fault injection. Streaming-ANN benchmarks (FreshDiskANN, SPFresh, the NeurIPS'23 Big-ANN track) measure recall decay under churn on one machine, with no replication dimension. Jepsen-family checkers assume a read has one correct value, which an approximate index doesn't have. Full positioning, per-paper summaries, and — importantly — the specific claims this project must *not* make because prior work already covers them: [`research/RELATED_WORK.md`](research/RELATED_WORK.md).
+
+## License / citation
+
+MIT — see [`LICENSE`](LICENSE). If this work is useful, please cite the repository; a formal citation format will be added if/when this research is written up for submission (see `research/RELATED_WORK.md` for candidate venues).
 
 ---
 
-## The demo: kill the leader
+## Appendix: the experimental system
+
+Everything below describes **Nano-DB**, the Raft-replicated vector database the research above runs on — infrastructure, not the research contribution.
+
+### What it is
+
+A distributed vector database built from first principles in C++17 — no consensus library, no managed queue, no distributed key-value store. Every distributed systems primitive here is implemented from scratch: the Raft log, the quorum write protocol, the consistent hash ring, the epoch fence.
+
+**If you need a production vector database, use [Qdrant](https://qdrant.tech) or [Milvus](https://milvus.io).** This project exists to understand what's inside them, and to have a controllable, inspectable system to run the replica-recall research on.
+
+### The demo: kill the leader
+
+This shows the control plane surviving a leader kill with zero dropped writes — a different, narrower guarantee than the research above, which is about search *quality*, not write loss. The control plane demo below does not show replica-level recall divergence; that's what `research/replica_recall/` measures.
 
 ```
-$ ./cluster.sh up
+$ ./demo/cluster.sh up
 Starting Nano-DB cluster (9 containers)...
 Waiting for Raft leader election...
   Elapsed: 8s — leader elected.
@@ -41,7 +150,7 @@ Cluster ready.
   API:     http://localhost:8080
   Grafana: http://localhost:3000  (admin / nanodb)
 
-$ python3 scripts/demo_chaos.py
+$ python3 demo/demo_chaos.py
 
 ============================================================
   Nano-DB Chaos Demo: Kill the Leader, Lose Zero Writes
@@ -80,16 +189,14 @@ Cluster is up. Current leader: coordinator-0 (term=3)
 
 Raft term jumps 455→456 as coordinator-1 wins the election; shard failovers=0 and insert failures=0 throughout — the Raft layer absorbed the leader kill with zero data-plane disruption:
 
-![Grafana Dashboard](docs/images/grafana.png)
+![Grafana Dashboard](docs/architecture/images/grafana.png)
 
----
-
-## Quick start
+### Quick start
 
 ```bash
-git clone --recurse-submodules https://github.com/shlokkvaishnav/Nano-DB.git
-cd Nano-DB
-./cluster.sh up
+git clone --recurse-submodules https://github.com/shlokkvaishnav/nano-db-replica-recall.git
+cd nano-db-replica-recall
+./demo/cluster.sh up
 ```
 
 Insert a vector:
@@ -111,20 +218,18 @@ curl -X POST localhost:8080/search \
 Kill the leader and verify zero data loss:
 
 ```bash
-python3 scripts/demo_chaos.py
+python3 demo/demo_chaos.py
 ```
 
 Run 60 seconds of continuous random process kills across all 12 nodes:
 
 ```bash
-./cluster.sh chaos
+./demo/cluster.sh chaos
 ```
 
----
+### Architecture
 
-## Architecture
-
-![Cluster architecture](docs/images/architecture.png)
+![Cluster architecture](docs/architecture/images/architecture.png)
 
 **Control plane (Raft group).** Three coordinator nodes form a Raft cluster. The elected leader handles all write coordination — failover decisions, shard membership changes, and primary promotions all flow through Raft consensus. Any coordinator can be killed; the remaining two elect a new leader within a second and resume without data loss.
 
@@ -132,9 +237,9 @@ Run 60 seconds of continuous random process kills across all 12 nodes:
 
 **Failover.** A background health-check loop on the Raft leader detects primary failures after 3 consecutive missed pings (~3 seconds). It promotes the replica with the highest element count — the most complete one — not just the first reachable one. That distinction was a real bug, found by the chaos harness.
 
----
+Deeper reference on every subsystem above (mmap storage layout, node layout, HNSW graph, SIMD distance kernels, consistent hashing, gRPC RPC, Raft consensus, failover, observability): [`docs/architecture/INTERNALS.md`](docs/architecture/INTERNALS.md).
 
-## Fault tolerance
+### Fault tolerance
 
 Three invariants that the chaos harness validates continuously:
 
@@ -144,15 +249,13 @@ Three invariants that the chaos harness validates continuously:
 
 3. **Full recovery.** After chaos stops, the cluster returns to a fully consistent state. No manual intervention required.
 
-To verify yourself:
+These are the invariants nano-db's own fault-tolerance harness checks — a stronger, different, and narrower guarantee than what `research/replica_recall/` measures (search *quality* per replica, not write survival at the cluster level).
 
 ```bash
-./cluster.sh chaos   # 60s of random kills, invariant report at the end
+./demo/cluster.sh chaos   # 60s of random kills, invariant report at the end
 ```
 
----
-
-## Key features
+### Key features
 
 | Category | What's built |
 |----------|-------------|
@@ -165,9 +268,7 @@ To verify yourself:
 | **Chaos testing** | Continuous random process kills with data integrity invariants validated throughout |
 | **Observability** | Prometheus metrics + Grafana dashboard (auto-provisioned) |
 
----
-
-## Performance
+### Performance
 
 **A caveat before the numbers: most of this table has never been re-measured
 since it was first written, and one row (single-node insert) traces to a
@@ -193,24 +294,24 @@ not re-run this pass. All cluster numbers include HTTP and replication overhead.
 | Failover recovery | **0.5 s** | primary killed, replica promoted by element count |
 | Raft leader election | **< 1 s** | randomized 300–600 ms timeouts |
 | Single-node insert | **510–1,103 TPS** *(native, verified 2026-08)* | peaks at 2 threads, *declines* to 728 at 8 — see footnote 2 |
-| Single-node search | **not currently measured** | `benchmarks/benchmark_throughput.cpp` reports no search-latency number; nothing else in the repo does either |
+| Single-node search | **not currently measured** | `benchmarks/portfolio/benchmark_throughput.cpp` reports no search-latency number; nothing else in the repo does either |
 | Recall@10 | **≤ 81.6%** on synthetic data *(verified 2026-08)*, corpus-dependent | see footnote 3 |
 
-<sup>1</sup> 163 vec/s at 8 concurrent clients; 146 vec/s is the reproducible 4-client Docker result from `benchmarks/cluster_benchmark_results.json` (`./cluster.sh up && python3 benchmarks/cluster_benchmark.py`). The native row is `benchmarks/cluster_throughput.py --repeat 5`, no Docker layer, no artificial pacing, median with explicit range rather than a point estimate — a single run on this host showed ~60% spread. Docker and native are different deployments and the two throughput numbers aren't directly comparable, but for what it's worth native came out faster (less network-stack overhead); native search came out much slower, most likely explained by weaker hardware (see footnote 2) rather than the deployment difference, since a smaller index should search faster, not slower.
+<sup>1</sup> 163 vec/s at 8 concurrent clients; 146 vec/s is the reproducible 4-client Docker result from `benchmarks/portfolio/cluster_benchmark_results.json` (`./demo/cluster.sh up && python3 benchmarks/portfolio/cluster_benchmark.py`). The native row is `benchmarks/portfolio/cluster_throughput.py --repeat 5`, no Docker layer, no artificial pacing, median with explicit range rather than a point estimate — a single run on this host showed ~60% spread. Docker and native are different deployments and the two throughput numbers aren't directly comparable, but for what it's worth native came out faster (less network-stack overhead); native search came out much slower, most likely explained by weaker hardware (see footnote 2) rather than the deployment difference, since a smaller index should search faster, not slower.
 
-<sup>2</sup> `benchmarks/benchmark_throughput.cpp`'s own header has a line reading `Hardware used (fill in before publishing): [e.g. Intel Core i7-12700H, 14 cores, 20 threads]` — an example placeholder, never actually filled in. Whatever number was previously quoted here (6,500 TPS) was measured on unknown hardware that was never documented. The 510–1,103 TPS range is what this exact binary reports today, on a machine with 4 logical threads total — which also explains the throughput *drop* at 8 threads (oversubscription).
+<sup>2</sup> `benchmarks/portfolio/benchmark_throughput.cpp`'s own header has a line reading `Hardware used (fill in before publishing): [e.g. Intel Core i7-12700H, 14 cores, 20 threads]` — an example placeholder, never actually filled in. Whatever number was previously quoted here (6,500 TPS) was measured on unknown hardware that was never documented. The 510–1,103 TPS range is what this exact binary reports today, on a machine with 4 logical threads total — which also explains the throughput *drop* at 8 threads (oversubscription).
 
-<sup>3</sup> `benchmarks/benchmark_recall.cpp` on 100k synthetic vectors, swept over `ef_search` — recall is flat at 46.3% for `ef_search` 10–100, then rises to 81.6% at `ef_search=500`. It does not reach 95% anywhere in the sweep. Synthetic uniform data suffers distance concentration, which is exactly what depresses recall here for reasons unrelated to index quality — see "Recall on synthetic data" in Benchmark methodology below, and `docs/postmortem-recall-bugs.md`. `research/replica_recall/` measures recall against real SIFT1M vectors instead (`--dist sift`) and gets meaningfully higher, corpus-realistic numbers; see that package's README for current figures.
+<sup>3</sup> `benchmarks/research/benchmark_recall.cpp` on 100k synthetic vectors, swept over `ef_search` — recall is flat at 46.3% for `ef_search` 10–100, then rises to 81.6% at `ef_search=500`. It does not reach 95% anywhere in the sweep. Synthetic uniform data suffers distance concentration, which is exactly what depresses recall here for reasons unrelated to index quality — see "Recall on synthetic data" below, and [`docs/postmortems/recall-bugs.md`](docs/postmortems/recall-bugs.md). `research/replica_recall/` measures recall against real SIFT1M vectors instead (`--dist sift`) and gets meaningfully higher, corpus-realistic numbers — this is the number to trust; see that package's README for current figures.
 
-### Benchmark methodology
+#### Benchmark methodology
 
 - **Hardware:** all nodes on a single host via Docker Compose (Docker bridge network round-trip: ~0.1 ms)
 - **Warm-up:** 500 vectors inserted before the measurement window opens
 - **Query mix:** random 128-dimensional unit vectors, k=10, `"consistency": "strong"`
-- **Competitor comparisons** (`benchmarks/compare_against_competitors.py`) measure FAISS and hnswlib as direct in-process library calls with no HTTP or replication overhead — an apples-to-oranges comparison against Nano-DB's cluster numbers, but the right baseline for the single-node storage engine
-- **Recall on synthetic data**: both `compare_against_competitors.py` and `benchmarks/benchmark_recall.cpp` generate random synthetic vectors, which suffer distance concentration and depress recall for reasons unrelated to index quality — `benchmark_recall.cpp` says as much in its own comments. `research/replica_recall/` measures recall against real SIFT1M vectors instead (`--dist sift`); see `docs/postmortem-recall-bugs.md` for what synthetic-data recall numbers hid on this project specifically
+- **Competitor comparisons** (`benchmarks/portfolio/compare_against_competitors.py`) measure FAISS and hnswlib as direct in-process library calls with no HTTP or replication overhead — an apples-to-oranges comparison against Nano-DB's cluster numbers, but the right baseline for the single-node storage engine
+- **Recall on synthetic data**: both `compare_against_competitors.py` and `benchmarks/research/benchmark_recall.cpp` generate random synthetic vectors, which suffer distance concentration and depress recall for reasons unrelated to index quality — `benchmark_recall.cpp` says as much in its own comments. `research/replica_recall/` measures recall against real SIFT1M vectors instead (`--dist sift`); see [`docs/postmortems/recall-bugs.md`](docs/postmortems/recall-bugs.md) for what synthetic-data recall numbers hid on this project specifically — this is the origin story of the whole research direction above
 
-### Tail latency in scatter-gather
+#### Tail latency in scatter-gather
 
 In a fan-out search across N shards, the coordinator must wait for all N shards before merging and returning results. This means:
 
@@ -230,15 +331,13 @@ p50 stays roughly flat as shard count grows (more parallelism), but p99 worsens 
 
 The p99 ceiling (~26ms) reflects the hard maximum in this Docker-on-single-host setup where intra-host network jitter is minimal. On a real multi-machine deployment with network-level tail latency, the effect is more pronounced — the modeled values understate the real divergence at scale.
 
-To reproduce: `python3 benchmarks/tail_latency_analysis.py` (requires cluster running).
+To reproduce: `python3 benchmarks/portfolio/tail_latency_analysis.py` (requires cluster running).
 
----
+### Raft consensus
 
-## Raft consensus
+![Raft state machine](docs/architecture/images/raft-state-machine.png)
 
-![Raft state machine](docs/images/raft-state-machine.png)
-
-The Raft implementation is the centrepiece of this project, built from the paper with no external library.
+The Raft implementation is the centrepiece of this system, built from the paper with no external library.
 
 **Leader election** uses randomized timeouts (300–600 ms) to prevent split votes. A candidate only wins if its log is at least as up-to-date as the voter's — not just term comparison, but a compound check on both term and index that prevents a stale node from becoming leader.
 
@@ -246,21 +345,17 @@ The Raft implementation is the centrepiece of this project, built from the paper
 
 **Log compaction** snapshots the cluster topology every 64 committed entries and installs snapshots on lagging followers instead of replaying full history.
 
----
-
-## Observability
+### Observability
 
 ```bash
-./cluster.sh up   # monitoring stack is included
+./demo/cluster.sh up   # monitoring stack is included
 ```
 
 Grafana at `localhost:3000` (admin/nanodb) with a pre-built dashboard: cluster throughput, search latency percentiles, Raft term changes, failover events, and per-shard stats. All panels are backed by 14 Prometheus metrics exported at `GET /metrics` on every coordinator.
 
----
+### Testing
 
-## Testing
-
-**Unit tests (9):** Raft Figure 8 commit safety (adversarial 5-node scenario + mutation test), log compaction, consistent hash ring distribution, deterministic key hashing, ID map store persistence, concurrent config writes, HNSW correctness, SIMD distance accuracy, and mmap persistence. Separately, `research/replica_recall/test_metrics.py` has 75 offline checks across 13 test functions on the measurement core (no cluster required).
+**Unit tests (9):** Raft Figure 8 commit safety (adversarial 5-node scenario + mutation test), log compaction, consistent hash ring distribution, deterministic key hashing, ID map store persistence, concurrent config writes, HNSW correctness, SIMD distance accuracy, and mmap persistence. Separately, `research/replica_recall/test_metrics.py` has 75 offline checks across 13 test functions on the measurement core (no cluster required) — this is the test suite the research findings themselves depend on.
 
 ```bash
 mkdir build && cd build
@@ -275,11 +370,9 @@ ctest --output-on-failure
 python3 chaos_harness.py --duration 60
 ```
 
-Orchestrates the full cluster from binaries, runs continuous writes, randomly kills and restarts any of the 12 processes (9 shard replicas + 3 coordinators), and validates the three fault-tolerance invariants throughout.
+Orchestrates the full cluster from binaries, runs continuous writes, randomly kills and restarts any of the 12 processes (9 shard replicas + 3 coordinators), and validates the three fault-tolerance invariants throughout. This is the same fault-injection engine `research/replica_recall/` reuses for its chaos protocol.
 
----
-
-## Building from source
+### Building from source
 
 ```bash
 mkdir build && cd build
@@ -288,7 +381,7 @@ cmake .. -DCMAKE_BUILD_TYPE=Release \
          -DNANODB_BUILD_SERVER=ON \
          -DNANODB_BUILD_CLUSTER=ON
 cmake --build . -j$(nproc)
-ctest --output-on-failure   # 10 tests
+ctest --output-on-failure   # 9 tests
 ```
 
 Requires: CMake 3.16+, g++ 13+, `protobuf-compiler`, `libgrpc++-dev`, `libomp-dev`.

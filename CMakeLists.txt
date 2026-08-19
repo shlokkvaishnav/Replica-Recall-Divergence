@@ -131,10 +131,10 @@ if(NANODB_BUILD_CLUSTER)
 endif()
 
 # ---- Benchmarks ----
-add_executable(benchmark_throughput benchmarks/benchmark_throughput.cpp)
+add_executable(benchmark_throughput benchmarks/portfolio/benchmark_throughput.cpp)
 target_link_libraries(benchmark_throughput PRIVATE nano_core OpenMP::OpenMP_CXX)
 
-add_executable(benchmark_recall benchmarks/benchmark_recall.cpp)
+add_executable(benchmark_recall benchmarks/research/benchmark_recall.cpp)
 target_link_libraries(benchmark_recall PRIVATE nano_core OpenMP::OpenMP_CXX)
 
 # ---- Tests ----

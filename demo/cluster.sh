@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 COMPOSE_FLAGS="-f $SCRIPT_DIR/deploy/docker-compose.cluster.yml -f $SCRIPT_DIR/deploy/docker-compose.monitoring.yml"
 API="http://localhost:8080"
 
 usage() {
-    echo "Usage: ./cluster.sh <command>"
+    echo "Usage: ./demo/cluster.sh <command>"
     echo ""
     echo "  up      Start cluster + monitoring stack (waits for Raft leader election)"
     echo "  down    Stop everything"
@@ -35,9 +35,9 @@ cmd_up() {
             echo "  Grafana: http://localhost:3000  (admin / nanodb)"
             echo ""
             echo "Next steps:"
-            echo "  python3 scripts/demo_chaos.py     # kill the leader, watch zero writes drop"
-            echo "  ./cluster.sh chaos                # 60s of random kills + invariant check"
-            echo "  ./cluster.sh down                 # tear everything down"
+            echo "  python3 demo/demo_chaos.py        # kill the leader, watch zero writes drop"
+            echo "  ./demo/cluster.sh chaos           # 60s of random kills + invariant check"
+            echo "  ./demo/cluster.sh down            # tear everything down"
             return 0
         fi
         sleep 1

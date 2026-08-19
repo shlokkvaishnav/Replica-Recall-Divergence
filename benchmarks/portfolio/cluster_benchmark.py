@@ -273,9 +273,9 @@ def main():
     print(f"{'='*60}")
     print(json.dumps(results, indent=2))
 
-    with open("benchmarks/cluster_benchmark_results.json", "w") as f:
+    with open("benchmarks/portfolio/cluster_benchmark_results.json", "w") as f:
         json.dump(results, f, indent=2)
-    print("\nResults saved to benchmarks/cluster_benchmark_results.json")
+    print("\nResults saved to benchmarks/portfolio/cluster_benchmark_results.json")
 
 
 if __name__ == "__main__":

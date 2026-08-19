@@ -22,7 +22,7 @@ think the general lesson is.
 
 ## Why the benchmark couldn't see it
 
-`benchmarks/benchmark_recall.cpp` builds an index, sweeps `ef_search`, and
+`benchmarks/research/benchmark_recall.cpp` builds an index, sweeps `ef_search`, and
 measures recall@10 against brute-force ground truth. That is the right shape
 for a recall benchmark. It reported ~95%.
 

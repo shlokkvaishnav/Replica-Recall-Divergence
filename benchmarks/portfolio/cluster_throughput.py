@@ -10,13 +10,13 @@ which caps it at ~100/s per thread regardless of how fast the cluster is. It
 is built to keep a steady background load while measurement happens
 elsewhere, not to find a ceiling.
 
-Why not reuse benchmarks/cluster_benchmark.py: that one targets a Docker
-Compose deployment. Numbers from Docker and from native binaries are not
-comparable, so a before/after comparison has to hold the environment fixed.
+Why not reuse benchmarks/portfolio/cluster_benchmark.py: that one targets a
+Docker Compose deployment. Numbers from Docker and from native binaries are
+not comparable, so a before/after comparison has to hold the environment fixed.
 
 Usage:
-    python benchmarks/cluster_throughput.py --duration 30 --writers 8
-    python benchmarks/cluster_throughput.py --json results.json
+    python benchmarks/portfolio/cluster_throughput.py --duration 30 --writers 8
+    python benchmarks/portfolio/cluster_throughput.py --json results.json
 
 Exits non-zero if the cluster fails to come up.
 """
@@ -32,7 +32,7 @@ import threading
 import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-ROOT = os.path.abspath(os.path.join(HERE, ".."))
+ROOT = os.path.abspath(os.path.join(HERE, "..", ".."))
 sys.path.insert(0, ROOT)
 
 import chaos_harness as ch                                        # noqa: E402
