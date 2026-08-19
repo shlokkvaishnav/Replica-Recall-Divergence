@@ -4,6 +4,9 @@ Why things are the way they are, so the project doesn't depend on anyone's memor
 
 ---
 
+**Renamed the repository `Nano-DB-Replica-Recall` → `Replica-Recall-Divergence`, at the moment the `research/cross-system-replication` branch was opened.**
+The `Nano-DB-Replica-Recall` name was deliberately chosen to be non-overclaiming — it could never be misread as a general claim, because the system was in the name. That reasoning stops being the right tradeoff the moment the project starts actively testing generalization to a second system: a Qdrant experiment living in a repo literally named after Nano-DB would undersell a positive cross-system result. Renamed to the phenomenon's actual name instead, ahead of any cross-system evidence existing — the non-overclaiming work now lives entirely in the README's ESTABLISHED/HYPOTHESIS/OPEN/DO NOT CLAIM framing rather than in the repo name, which is the more durable place for it to live regardless of which system(s) the project ends up covering.
+
 **Adopted the research-branch workflow in `GIT_WORKFLOW.md`.**
 Prior work (the original recall-bug investigation, the replica-recall Layer 1 measurement, the catastrophic-disconnection investigation) was all done directly on `main` or on branches that were merged and deleted without a formal spec-first process. That work is real and stays in the historical record as-is — this decision is about *future* branches, not a retroactive relabeling of what already happened. See `GIT_WORKFLOW.md`.
 
