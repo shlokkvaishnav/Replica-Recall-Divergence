@@ -64,6 +64,23 @@ Outcome (a) supports — but does not prove — that the mechanism is general; i
 
 ---
 
+## Addendum: 2026-08-23 — confirmed live per-replica probe path exists
+
+Before writing any implementation code, the open finding noted when this branch was picked back up — that Qdrant exposes an undocumented internal gRPC service (`PointsInternal`, default port 6335, on the same address as the `--uri` cluster-consensus endpoint) with a `shard_id`-scoped `CoreSearchBatch` RPC — was verified empirically rather than taken on faith. Verification method and result:
+
+1. Brought up a 3-node Qdrant cluster (`qdrant/qdrant:latest`, distributed mode via `QDRANT__CLUSTER__ENABLED=true`, each node's `--uri` on its own `:6335`) and created a collection with `shard_number=2, replication_factor=3` — the same 2-shard × 3-replica topology this branch's experimental design calls for.
+2. Qdrant's public Python client (`qdrant-client` on PyPI) only ships `.proto` files for the external API (`points.proto`, `collections.proto`, `points_service.proto` — port 6334/6333). It does **not** ship `points_internal_service.proto`, `raft_service.proto`, or `collections_internal_service.proto` — confirming these are genuinely undocumented from the client's perspective, not just under-advertised.
+3. Pulled the internal `.proto` files directly from the `qdrant/qdrant` GitHub source (`lib/api/src/grpc/proto/`), compiled Python gRPC stubs from them, and called `PointsInternal.CoreSearchBatch` directly against port 6335 from outside the cluster's own container network, with no credentials of any kind.
+4. Confirmed gRPC reflection is *not* enabled on 6335 (`UNIMPLEMENTED` on `ServerReflectionInfo`, vs. connection failure — i.e., a gRPC server is there, it just doesn't self-describe), so the undocumented-ness is real: nothing short of reading the Rust source (or, as done here, the checked-in `.proto` files) tells a client this surface exists.
+5. `CoreSearchBatch` against `shard_id=0` on a healthy collection returned a normal (empty, since no points existed yet) result — **no authentication or metadata was required**. Requesting a shard the node does not hold (`shard_id=99`) returned `NOT_FOUND: shard 99 not found` rather than a redirect or a coordinator-side scatter-gather — confirming the RPC is answered locally, per-node, per-shard, not routed.
+6. Inserted two points (landing on different shards under the collection's default hashing) via the normal public API, then queried `CoreSearchBatch` for both shards directly against all three nodes' internal ports individually. Every node answered identically and correctly for the shards it holds — i.e., this is a genuine **direct-to-replica** read path, architecturally the same shape as nano-db's own `ShardService.Search`: no quorum, no scatter-gather, one specific replica's own view of one specific shard.
+
+**Conclusion: the finding is confirmed.** A live, per-replica probe (not just snapshot-after-stop, e.g. via file-level storage inspection or a stopped-node's on-disk state) is buildable for Qdrant using exactly this path — `PointsInternal.CoreSearchBatch` for the index-quality side of the measurement, and `PointsInternal.Scroll` (also `shard_id`-scoped in the same `.proto`) for enumerating each replica's own live id set, which is the `ListLocalIds` analog nano-db's `probe.py` depends on. This is what makes reusing `metrics.py` unmodified possible on this branch, per the isolation constraint in the Experimental design section above: the transport/API adapter differs, the measurement core does not.
+
+This also means the probe **does not need Qdrant's own consistency/read-preference settings to cooperate** — it bypasses them entirely, the same way `ShardService.Search` does on nano-db, which is what keeps the two systems' probes comparable rather than measuring two different things.
+
+One caveat worth recording rather than glossing over: this port is intended as private, cluster-internal transport (it shares a port with Raft consensus messages), not a supported client surface. Qdrant could change or remove it without notice in a future release, is not guaranteed to behave identically across versions, and none of this is sanctioned or documented usage of the product. `qdrant_probe.py` (added on this branch) pins and records the exact image tag/version this was verified against for that reason.
+
 ## Results
 
 *(Not yet — no implementation exists on this branch. This section stays empty until an experiment actually runs.)*
