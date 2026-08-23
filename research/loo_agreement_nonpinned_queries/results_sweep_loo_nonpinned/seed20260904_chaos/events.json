@@ -1,0 +1,114 @@
+[
+  {
+    "t": 1787495231.9568067,
+    "target": "shard-1-2",
+    "alive_after_restart": true,
+    "down_for_s": 4.139504921167707,
+    "restart_count": 1,
+    "t_rel": 12.428
+  },
+  {
+    "t": 1787495239.7158735,
+    "target": "coordinator-2",
+    "alive_after_restart": true,
+    "down_for_s": 2.901874389467309,
+    "restart_count": 1,
+    "t_rel": 20.187
+  },
+  {
+    "t": 1787495247.0767386,
+    "target": "coordinator-1",
+    "alive_after_restart": true,
+    "down_for_s": 1.1266581483727276,
+    "restart_count": 1,
+    "t_rel": 27.548
+  },
+  {
+    "t": 1787495251.8192604,
+    "target": "shard-0-1",
+    "alive_after_restart": true,
+    "down_for_s": 1.238966442581265,
+    "restart_count": 1,
+    "t_rel": 32.29
+  },
+  {
+    "t": 1787495255.9951518,
+    "target": "shard-1-2",
+    "alive_after_restart": true,
+    "down_for_s": 1.8223287397753363,
+    "restart_count": 2,
+    "t_rel": 36.466
+  },
+  {
+    "t": 1787495261.607748,
+    "target": "coordinator-0",
+    "alive_after_restart": true,
+    "down_for_s": 4.085641481437609,
+    "restart_count": 1,
+    "t_rel": 42.079
+  },
+  {
+    "t": 1787495269.2413845,
+    "target": "coordinator-2",
+    "alive_after_restart": true,
+    "down_for_s": 4.47380493946137,
+    "restart_count": 2,
+    "t_rel": 49.712
+  },
+  {
+    "t": 1787495278.0385172,
+    "target": "shard-1-0",
+    "alive_after_restart": true,
+    "down_for_s": 4.933281136819324,
+    "restart_count": 1,
+    "t_rel": 58.51
+  },
+  {
+    "t": 1787495286.6891232,
+    "target": "shard-1-0",
+    "alive_after_restart": true,
+    "down_for_s": 0.6427290714083282,
+    "restart_count": 2,
+    "t_rel": 67.16
+  },
+  {
+    "t": 1787495289.9550788,
+    "target": "shard-1-0",
+    "alive_after_restart": true,
+    "down_for_s": 4.700111482917565,
+    "restart_count": 3,
+    "t_rel": 70.426
+  },
+  {
+    "t": 1787495297.6899543,
+    "target": "shard-1-1",
+    "alive_after_restart": true,
+    "down_for_s": 0.9097638980081129,
+    "restart_count": 1,
+    "t_rel": 78.161
+  },
+  {
+    "t": 1787495302.8671153,
+    "target": "coordinator-2",
+    "alive_after_restart": true,
+    "down_for_s": 2.545384701016081,
+    "restart_count": 3,
+    "t_rel": 83.338
+  },
+  {
+    "t": 1787495309.1763237,
+    "target": "shard-1-1",
+    "alive_after_restart": true,
+    "down_for_s": 3.158451366787031,
+    "restart_count": 2,
+    "t_rel": 89.647
+  },
+  {
+    "t": 1787495316.3965564,
+    "target": "coordinator-0",
+    "alive_after_restart": true,
+    "down_for_s": 0.6568041750983087,
+    "restart_count": 2,
+    "t_rel": 96.868
+  }
+]

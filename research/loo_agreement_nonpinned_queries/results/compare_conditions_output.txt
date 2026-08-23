@@ -1,0 +1,30 @@
+  corpus distribution: sift (10 runs)
+  corpus distribution: sift (10 runs)
+
+pinned seeds:    [20260900, 20260901, 20260902, 20260903, 20260904]
+nonpinned seeds: [20260900, 20260901, 20260902, 20260903, 20260904]
+
+==============================================================================
+Per-seed loo_agreement detection stats (chaos-condition runs only)
+==============================================================================
+        seed cond         hit_rate  rank_corr     margin
+    20260900 pinned         0.7500     0.8125     0.0429
+    20260901 pinned         1.0000     1.0000     0.0946
+    20260902 pinned         1.0000     1.0000     0.0767
+    20260903 pinned         0.9091     0.9318     0.0603
+    20260904 pinned         0.6923     0.8462     0.0788
+    20260900 nonpinned      0.8667     0.8000     0.0701
+    20260901 nonpinned      0.6842     0.7895     0.0372
+    20260902 nonpinned      0.7500     0.6562     0.0523
+    20260903 nonpinned      1.0000     0.9333     0.0407
+    20260904 nonpinned      1.0000     0.9500     0.0824
+
+==============================================================================
+Between-condition comparison: pinned vs nonpinned, 5 seeds each
+(the actual pre-registered test -- SPEC.md's Metrics section)
+==============================================================================
+  detection hit rate     pinned 0.8703 +/- 0.1426   nonpinned 0.8602 +/- 0.1434   p=0.9048 
+  rank correlation       pinned 0.9181 +/- 0.0865   nonpinned 0.8258 +/- 0.1201   p=0.2063 
+  true-recall margin     pinned 0.0706 +/- 0.0197   nonpinned 0.0566 +/- 0.0194   p=0.3095 
+
+  Exact two-sided Mann-Whitney, 5v5, floor p=0.0079.

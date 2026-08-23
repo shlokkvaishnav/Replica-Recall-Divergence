@@ -36,10 +36,37 @@ python research/replica_recall/run_experiment.py --dist sift --sift-vectors 1000
 are exactly the output of those two commands (built and run inside a Linux
 container per `research/replica_recall/RESULTS.md`'s note that this harness
 needs Linux + built cluster binaries -- it was not run natively on Windows).
+**Read SPEC.md's addendum before trusting these pilot numbers -- the
+headline finding did not survive the 5-seed sweep below.**
+
+## The 5-seed sweep
+
+```
+python research/replica_recall/sweep.py --seeds 5 --seed-base 20260900 \
+    --duration 90 --writers 4 --out-dir results_sweep_loo_pinned \
+    --dist sift --sift-vectors 100000 --queries 100 --k 10 --warmup-s 10 \
+    --sample-interval 5 --loo-query-mode pinned
+
+python research/replica_recall/sweep.py --seeds 5 --seed-base 20260900 \
+    --duration 90 --writers 4 --out-dir results_sweep_loo_nonpinned \
+    --dist sift --sift-vectors 100000 --queries 100 --k 10 --warmup-s 10 \
+    --sample-interval 5 --loo-query-mode nonpinned --loo-queries 100 --loo-pool-size 3000
+```
+
+`../replica_recall/sweep.py` is reused completely unmodified -- it forwards
+unrecognized flags straight through to `run_experiment.py`. Results are
+`results_sweep_loo_pinned/` and `results_sweep_loo_nonpinned/`.
 
 ## Analysis
 
-`research/replica_recall/analyze.py` works unmodified on either condition's
-`samples.csv` -- the CSV schema didn't change, only how the `loo_agreement`
-column's values were computed. See SPEC.md's Results section for the
-detection-stats comparison between the two pilot runs.
+`research/replica_recall/analyze.py` and `aggregate.py` work unmodified on
+either condition's output -- the CSV/directory schema didn't change, only
+how the `loo_agreement` column's values were computed. `aggregate.py
+--sweep-dir results_sweep_loo_pinned` (or `_nonpinned`) gives each
+condition's own baseline-vs-chaos comparison (output saved as
+`results/aggregate_{pinned,nonpinned}.txt`). For the actual research
+question -- pinned vs. nonpinned, not baseline vs. chaos -- use
+`compare_conditions.py` (this branch), which extracts each condition's
+5 chaos-run seed-level summaries and runs the between-condition
+Mann-Whitney the issue's spec calls for. See SPEC.md's addendum for the
+result and what it means.
