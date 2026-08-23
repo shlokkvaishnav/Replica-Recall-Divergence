@@ -1,0 +1,98 @@
+[
+  {
+    "t": 1787493486.7050545,
+    "target": "shard-1-1",
+    "alive_after_restart": true,
+    "down_for_s": 4.8382494057490835,
+    "restart_count": 1,
+    "t_rel": 12.836
+  },
+  {
+    "t": 1787493494.8364484,
+    "target": "coordinator-2",
+    "alive_after_restart": true,
+    "down_for_s": 3.5942969032498677,
+    "restart_count": 1,
+    "t_rel": 20.967
+  },
+  {
+    "t": 1787493502.441782,
+    "target": "shard-1-0",
+    "alive_after_restart": true,
+    "down_for_s": 2.699852385306651,
+    "restart_count": 1,
+    "t_rel": 28.573
+  },
+  {
+    "t": 1787493507.9987469,
+    "target": "shard-0-0",
+    "alive_after_restart": true,
+    "down_for_s": 2.5083270215252496,
+    "restart_count": 1,
+    "t_rel": 34.13
+  },
+  {
+    "t": 1787493513.8807175,
+    "target": "shard-1-2",
+    "alive_after_restart": true,
+    "down_for_s": 1.403409620477305,
+    "restart_count": 1,
+    "t_rel": 40.012
+  },
+  {
+    "t": 1787493519.2280674,
+    "target": "shard-0-1",
+    "alive_after_restart": true,
+    "down_for_s": 2.552490789147289,
+    "restart_count": 1,
+    "t_rel": 45.359
+  },
+  {
+    "t": 1787493524.714919,
+    "target": "coordinator-1",
+    "alive_after_restart": true,
+    "down_for_s": 4.922113678957648,
+    "restart_count": 1,
+    "t_rel": 50.846
+  },
+  {
+    "t": 1787493533.9066577,
+    "target": "coordinator-2",
+    "alive_after_restart": true,
+    "down_for_s": 1.319871282873879,
+    "restart_count": 2,
+    "t_rel": 60.038
+  },
+  {
+    "t": 1787493539.184636,
+    "target": "shard-0-1",
+    "alive_after_restart": true,
+    "down_for_s": 3.9709837910013532,
+    "restart_count": 2,
+    "t_rel": 65.316
+  },
+  {
+    "t": 1787493547.373651,
+    "target": "shard-0-1",
+    "alive_after_restart": true,
+    "down_for_s": 2.6257363410465686,
+    "restart_count": 3,
+    "t_rel": 73.505
+  },
+  {
+    "t": 1787493554.7058115,
+    "target": "coordinator-2",
+    "alive_after_restart": true,
+    "down_for_s": 4.741639806542115,
+    "restart_count": 3,
+    "t_rel": 80.837
+  },
+  {
+    "t": 1787493565.2123337,
+    "target": "shard-1-2",
+    "alive_after_restart": true,
+    "down_for_s": 4.787309723762886,
+    "restart_count": 2,
+    "t_rel": 91.343
+  }
+]

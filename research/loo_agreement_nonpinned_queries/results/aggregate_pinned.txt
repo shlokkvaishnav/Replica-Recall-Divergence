@@ -1,0 +1,49 @@
+  corpus distribution: sift (10 runs)
+==============================================================================
+Seed sweep -- baseline vs chaos
+==============================================================================
+  baseline runs : 5   seeds [20260900, 20260901, 20260902, 20260903, 20260904]
+  chaos runs    : 5   seeds [20260900, 20260901, 20260902, 20260903, 20260904]
+
+  metric                             baseline              chaos        p
+  ------------------------------------------------------------------------
+  within-shard spread       0.0001 +/- 0.0002  0.0764 +/- 0.0191  0.0079*
+    p95 spread              0.0004 +/- 0.0005  0.1919 +/- 0.0405  0.0079*
+  detector hit rate                 undefined             0.8703       --
+    rank correlation                undefined             0.9181       --
+    true recall margin              undefined             0.0706       --
+  index_recall              0.9872 +/- 0.0092  0.9605 +/- 0.0228  0.0952 
+  completeness              1.0000 +/- 0.0000  0.9611 +/- 0.0071  0.0079*
+  e2e_recall                0.9997 +/- 0.0004  0.9603 +/- 0.0085  0.0079*
+
+  Exact two-sided Mann-Whitney. With 5 vs 5 runs the smallest
+  attainable p is 0.0079 -- reaching it means the two groups
+  separate completely, not that the effect is enormous.
+
+==============================================================================
+Recall by index size, pooled across seeds
+==============================================================================
+          index size   baseline      chaos     delta       runs
+  --------------------------------------------------------------
+        0-2,500         0.9999     0.9751   -0.0248        5/5
+    2,500-5,000         0.9997     0.9540   -0.0457        5/5
+    5,000-7,500         0.9994     0.9652   -0.0342        3/4
+    7,500-10,000        0.9988     0.9589   -0.0399        2/2
+   10,000-12,500        0.9990     0.9836   -0.0154        1/1
+
+  mean size-matched delta: -0.0320 over 5 bins
+
+==============================================================================
+Verdict
+==============================================================================
+  [yes] Replicas diverge more under failure than without it.
+  [yes] The detector picks the degraded replica well above chance under chaos (mean 0.870 vs chance 0.333, 5/5 runs scorable; undefined on baseline, where nothing is degraded to find).
+  [no ] index_recall does not separate -- no evidence the graph itself is damaged; the divergence would be pure data loss.
+  [yes] completeness separates -- some of the divergence is data loss too.
+
+  The current shape of the result is all four above reading [yes]:
+  replicas diverge, the detector sees it, the graph is damaged
+  independently of data loss, and some of the divergence is data
+  loss too. Any [no] is worth understanding before writing
+  anything up -- and if index_recall ever reads [no] again, that
+  is the earlier (refuted) hypothesis, not a regression.
