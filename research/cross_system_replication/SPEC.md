@@ -127,9 +127,30 @@ This maps onto the original Hypothesis/Null-hypothesis framing precisely at the 
 **REVISE**, but materially advanced from the pilot's REVISE. `GIT_WORKFLOW.md`'s evidence and experimental-validity criteria are now satisfied for the core comparison — this is the actual pre-registered 5-seed sweep with a real Mann-Whitney result, not a single-seed anecdote — but two Confounds items remain genuinely open and a full MERGE/ARCHIVE call on the broader research question (does this generalize?) shouldn't be made until they're addressed:
 
 1. ~~Run the actual 5-seed sweep~~ — **done**, this addendum.
-2. **New, from this sweep's own healing result:** investigate why healing outcome varies so much by seed (100% down to -32%) — check whether it correlates with which node/shard was targeted, how much data was in flight when chaos hit, or chaos-event count/timing per seed (`events.json` per run has this).
+2. ~~Investigate why healing outcome varies so much by seed~~ — **checked** (see the later addendum below): narrowed to a candidate (same-node kills without a recovery window, plus elevated write-failure rate, both present in the single worst-outcome seed) but it does not explain the other four seeds cleanly. Still open as a *confirmed* mechanism — needs a purpose-built follow-up with deliberately controlled kill spacing/targeting, not more of the same random schedule at larger N.
 3. ~~Pin `QDRANT_IMAGE` to a digest~~ — **done**; this sweep ran under the pinned digest throughout (unlike the pilot, which ran under `:latest`).
 4. Investigate Qdrant's segment-merge/optimizer activity as a candidate explanation for why `index_recall` doesn't separate here (still open, unchanged from the pilot's Decision) — this time with 5 seeds' worth of node logs to check rather than one.
 5. The implementer-side bug fixed in this addendum (`qdrant_run_experiment.py` teardown on exception) should get a reviewer's eyes on the fix itself, not just the sweep it unblocked.
+6. **New:** a controlled follow-up experiment that deliberately varies inter-kill spacing and same-node-repeat rate as independent variables (rather than reading them out of `chaos_loop`'s random schedule after the fact) is the honest way to test item 2's candidate mechanism causally.
 
 Re-claim this branch or open a follow-on `experiment/*`/`analysis/*` branch for items 2 and 4 specifically — both are analysis of already-collected data (`results_sweep/`'s per-run `events.json` and node logs, not yet checked), not new experiment runs, so they may be cheaper to close out than this addendum was.
+
+## Addendum: 2026-08-23 (later still) — why healing varies by seed (Decision item 2)
+
+Per Decision item 2, checked whether the 5-seed sweep's healing variance (recovery 84%, 0%, 25%, -32%, 100%) correlates with anything visible in the already-collected `events.json`/`run_meta.json` per run, without running anything new:
+
+| seed | recovered | chaos events | same node repeated | shortest same-node recovery gap | confirmed writes | write failure rate |
+|---|---|---|---|---|---|---|
+| 20260910 | 84% | 3 | yes | 26.1s | 98,400 | 1.6% |
+| 20260911 | 0%* | 4 | yes | 18.5s | 86,368 | 1.5% |
+| 20260912 | 25% | 2 | no | n/a | 55,392 | 5.0% |
+| 20260913 | -32% | 2 | yes | 13.4s | 31,904 | 11.0% |
+| 20260914 | 100% | 3 | no | n/a | 42,272 | 5.3% |
+
+\* 20260911 only had 36 missing ids to begin with (a near-floor case per `aggregate.py`'s own healing table) — its 0% is a small-numerator artifact, not evidence of anything.
+
+**The clearest single pattern**: `20260913` — the worst outcome (got *worse* after chaos stopped) — is also the run with the shortest same-node recovery gap (node0 killed again only 13.4s after its previous restart) and by far the highest write-failure rate (11.0% vs. 1.5-5.3% elsewhere). A node hit again before it has time to catch up, combined with visibly degraded overall write throughput during the chaos window, is a plausible mechanism: it never gets a clean window to reconcile before absorbing further disruption, and if the *cluster's* write pressure was elevated (not just that node's), the missing-id count could keep growing after the chaos-stop timestamp for reasons unrelated to that specific node's own health.
+
+**This does not hold up as a complete explanation.** `20260912` had no repeated node at all (each of its 2 kills hit a different node, with plenty of recovery time by construction) yet still only recovered 25% — the second-worst non-floor outcome. If "avoid hitting the same node twice without a recovery window" were the full story, `20260912` should have healed cleanly like `20260914` (also no repeats), and it didn't. Write-failure rate alone doesn't rank cleanly either: `20260914` (100% healed) had a *higher* failure rate (5.3%) than `20260912` (25% healed, 5.0%) — so elevated write pressure by itself isn't sufficient either.
+
+**Conclusion: genuinely unresolved at n=5, narrowed but not confirmed.** The same-node-repeat-timing story is the best available single-variable candidate (it uniquely picks out the worst case correctly) but visibly fails to rank the other four seeds, and no other single variable checked here (event count, write-failure rate, confirmed-write volume) does better. This is not enough seeds to fit or rule out a multi-variable explanation responsibly — a purpose-built follow-up that *deliberately* varies inter-kill spacing and target-node repetition as controlled, not incidental, variables (rather than reading tea leaves from `chaos_loop`'s random schedule after the fact) is the honest way to actually answer this, not a larger version of the same random sweep. Recorded here as a narrowed hypothesis for that follow-up, not a finding.
