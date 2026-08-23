@@ -113,3 +113,31 @@ Each condition's own baseline-vs-chaos separation, from `aggregate.py`, for comp
 4. The query-pool-difficulty confound (mean k-NN distance, pinned set vs. held-out pool) remains unchecked and is lower priority now that the headline effect it was meant to help explain didn't replicate.
 
 Re-claim this branch or open a follow-on `experiment/*` branch for item 3 specifically, since it is the one open thread that could still recover something like the pilot's original (b) finding under a more aggressive (lower-query-count) nonpinned condition.
+
+## Addendum: 2026-08-23 (later still) — a smaller `--loo-queries` doesn't change the answer either
+
+Per Decision item 3, ran a third 5-seed sweep (same seeds, same scale/duration, same everything else) with `--loo-query-mode nonpinned --loo-queries 15` — an 85% reduction from the original nonpinned sweep's 100, meant to probe a more aggressive "realistic" workload (a client sending a handful of queries per round, not a hundred). `compare_conditions.py` was extended (this addendum) to take an arbitrary named set of conditions rather than a fixed pinned/nonpinned pair, so the same tool now covers all pairwise comparisons.
+
+| metric | pinned | nonpinned (100 q) | nonpinned_small (15 q) |
+|---|---|---|---|
+| detection hit rate | 0.870 ± 0.143 | 0.860 ± 0.143 | 0.811 ± 0.096 |
+| rank correlation | 0.918 ± 0.087 | 0.826 ± 0.120 | 0.827 ± 0.127 |
+| true-recall margin | 0.071 ± 0.020 | 0.057 ± 0.019 | 0.088 ± 0.038 |
+
+All three pairwise comparisons, all three metrics — 9 tests, none significant (p ranges 0.15-0.90). `nonpinned_small`'s hit rate (0.811) sits between the other two, not below both, and its margin is actually the *highest* of the three (though not significantly so). There is no sign of a "more aggressive nonpinned condition finally reveals the pinning-dependence effect" story at 15 queries/round any more than at 100.
+
+## Interpretation (updated)
+
+The one open thread from the previous addendum — whether a smaller per-round query count would recover something like the pilot's original signal — is now closed, negatively. Detection accuracy is stable across pinned, nonpinned-100, and nonpinned-15 at this scale and fault model. Combined with the previous addendum's finding, this is now three independent 5-seed conditions (15 total independent runs under chaos) all landing in the same 0.81-0.87 hit-rate band, none distinguishable from the others. This is a materially stronger basis for outcome (a) than a single pinned-vs-nonpinned comparison alone would be — the result isn't fragile to the specific nonpinned parameterization tested.
+
+This still does not establish the detector is workload-shape-invariant in general (the Motivation section's broader question): all three conditions used SIFT1M's own query distribution for both the pinned set and the held-out pool, so a query workload that differs in *distribution*, not just *count*, from the corpus's own queries (e.g., a genuinely different embedding distribution, or adversarially-hard queries) remains untested and is a different, larger question than issue #5 scoped.
+
+## Decision (updated)
+
+**REVISE**, now with a considerably more complete negative result. Items 1 and 3 from the previous addendum's Decision are both done; only item 4 (query-pool-difficulty confound) remains, and it is now lower priority still — with three independent conditions agreeing, a distributional-mismatch explanation for *any single* condition's number looking different is less load-bearing than it was after only one comparison. Remaining:
+
+1. ~~Run the 5-seed sweep~~ / ~~test a smaller `--loo-queries` value~~ — **both done**, this and the previous addendum. Consistent null across three conditions.
+2. The query-pool-difficulty confound (item 4, previous addendum) — still technically open, now clearly lowest priority.
+3. **New:** given how consistent this result is, the top-level README's Layer 3 language (if it currently implies detection depends on a pinned, non-representative workload) is worth a reviewer's read to check whether it should be updated to cite this branch's null result — not done here, since that's a README-thesis change and belongs in its own commit/discussion, not silently folded into this addendum.
+
+Given three consistent negative results at n=5 each, this branch is close to ARCHIVE-as-negative-result territory per `GIT_WORKFLOW.md`'s negative-results section (the *implementation* -- the `--loo-query-mode` flag itself -- is the kind of thing that could still merge as validated infrastructure even though the headline hypothesis it was built to test came back null, per that section's `graph_forensics.py` precedent) — left as REVISE rather than self-assessing ARCHIVE/MERGE outright, since that call should go through the same review process as everything else on this branch, not be decided unilaterally in an addendum.

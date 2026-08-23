@@ -51,22 +51,39 @@ python research/replica_recall/sweep.py --seeds 5 --seed-base 20260900 \
     --duration 90 --writers 4 --out-dir results_sweep_loo_nonpinned \
     --dist sift --sift-vectors 100000 --queries 100 --k 10 --warmup-s 10 \
     --sample-interval 5 --loo-query-mode nonpinned --loo-queries 100 --loo-pool-size 3000
+
+# a third, more aggressive condition: 15 queries/round instead of 100
+python research/replica_recall/sweep.py --seeds 5 --seed-base 20260900 \
+    --duration 90 --writers 4 --out-dir results_sweep_loo_nonpinned_small \
+    --dist sift --sift-vectors 100000 --queries 100 --k 10 --warmup-s 10 \
+    --sample-interval 5 --loo-query-mode nonpinned --loo-queries 15 --loo-pool-size 3000
 ```
 
 `../replica_recall/sweep.py` is reused completely unmodified -- it forwards
 unrecognized flags straight through to `run_experiment.py`. Results are
-`results_sweep_loo_pinned/` and `results_sweep_loo_nonpinned/`.
+`results_sweep_loo_pinned/`, `results_sweep_loo_nonpinned/`, and
+`results_sweep_loo_nonpinned_small/`.
 
 ## Analysis
 
 `research/replica_recall/analyze.py` and `aggregate.py` work unmodified on
-either condition's output -- the CSV/directory schema didn't change, only
-how the `loo_agreement` column's values were computed. `aggregate.py
---sweep-dir results_sweep_loo_pinned` (or `_nonpinned`) gives each
-condition's own baseline-vs-chaos comparison (output saved as
-`results/aggregate_{pinned,nonpinned}.txt`). For the actual research
-question -- pinned vs. nonpinned, not baseline vs. chaos -- use
-`compare_conditions.py` (this branch), which extracts each condition's
-5 chaos-run seed-level summaries and runs the between-condition
-Mann-Whitney the issue's spec calls for. See SPEC.md's addendum for the
-result and what it means.
+any condition's output -- the CSV/directory schema didn't change, only how
+the `loo_agreement` column's values were computed. `aggregate.py
+--sweep-dir results_sweep_loo_pinned` (or `_nonpinned`/`_nonpinned_small`)
+gives each condition's own baseline-vs-chaos comparison (output saved as
+`results/aggregate_{pinned,nonpinned,nonpinned_small}.txt`). For the actual
+research question -- pinned vs. nonpinned, not baseline vs. chaos -- use
+`compare_conditions.py` (this branch):
+
+```
+python research/loo_agreement_nonpinned_queries/compare_conditions.py \
+    --condition pinned=results_sweep_loo_pinned \
+    --condition nonpinned=results_sweep_loo_nonpinned \
+    --condition nonpinned_small=results_sweep_loo_nonpinned_small
+```
+
+It takes an arbitrary named set of sweep directories (not just a fixed
+pair), extracts each condition's 5 chaos-run seed-level summaries, and
+runs every pairwise between-condition Mann-Whitney -- the actual test
+the issue's spec calls for. See SPEC.md's addenda for the results and
+what they mean.
