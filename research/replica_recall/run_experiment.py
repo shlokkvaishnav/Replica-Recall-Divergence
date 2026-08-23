@@ -68,8 +68,28 @@ class RetainingWriter:
 
     def __init__(self, dim: int, seed: int, dist: str = "uniform",
                  intrinsic_dim: int = 12, noise: float = 0.02,
-                 sift_dir: str | None = None, sift_vectors: int = 200_000):
+                 sift_dir: str | None = None, sift_vectors: int = 200_000,
+                 loo_query_mode: str = "pinned", loo_pool_size: int = 3000):
+        """loo_query_mode: 'pinned' (default, unchanged behaviour -- the
+        loo_agreement/shard_agreement queries are the exact same pinned set
+        used for index_recall/e2e_recall) or 'nonpinned' (experiment/
+        loo-agreement-nonpinned-queries, issue #5: loo_agreement is instead
+        computed each round from a freshly-drawn subsample of a held-out
+        query pool, disjoint from the ground-truth query set, so a change in
+        detection accuracy can't be explained by ground-truth leakage -- see
+        that branch's SPEC.md Confounds section). index_recall/e2e_recall
+        always use the pinned set regardless of this flag; they need a fixed
+        query set to be comparable sample-to-sample, which is not in
+        question here -- only the query source loo_agreement is scored
+        against changes."""
         self.dim = dim
+        self.loo_query_mode = loo_query_mode
+        self.loo_pool_size = loo_pool_size
+        self._loo_pool_idx: np.ndarray | None = None      # sift only
+        self._loo_rng = np.random.default_rng([seed, 0xB00B1E])
+        self._loo_draw_count = 0
+        self._loo_seen_idx: set[int] = set()               # sift only, for
+                                                            # pool-coverage diagnostics
         self.lock = threading.Lock()
         self.vector_of: dict[str, np.ndarray] = {}
         self.confirmed_at: dict[str, float] = {}
@@ -215,10 +235,23 @@ class RetainingWriter:
             # querying with vectors that are themselves in the corpus makes
             # every query its own trivial nearest neighbour.
             pool = self._sift_queries
-            if n > len(pool):
+            need = n + (self.loo_pool_size if self.loo_query_mode == "nonpinned" else 0)
+            if need > len(pool):
                 raise ValueError(
-                    f"--queries {n} exceeds the {len(pool)} SIFT query vectors")
+                    f"--queries {n}" +
+                    (f" + --loo-pool-size {self.loo_pool_size}" if need > n else "") +
+                    f" exceeds the {len(pool)} SIFT query vectors")
             pick = qrng.choice(len(pool), size=n, replace=False)
+            if self.loo_query_mode == "nonpinned":
+                # Continue drawing from the SAME rng stream, so the held-out
+                # pool is deterministic given the seed but disjoint from the
+                # ground-truth pick above by construction (choice without
+                # replacement over what's left) -- this is what rules out the
+                # ground-truth-leakage confound in that branch's SPEC.md
+                # rather than merely asserting it.
+                remaining = np.setdiff1d(np.arange(len(pool)), pick)
+                loo_pick = qrng.choice(remaining, size=self.loo_pool_size, replace=False)
+                self._loo_pool_idx = loo_pick
             return np.ascontiguousarray(pool[np.sort(pick)])
         if self._proj is None:
             return qrng.random((n, self.dim), dtype=np.float32) * 2.0 - 1.0
@@ -226,6 +259,57 @@ class RetainingWriter:
         q = (z @ self._proj) / np.float32(self._intrinsic)
         q += qrng.standard_normal((n, self.dim)).astype(np.float32) * np.float32(self._noise)
         return q.astype(np.float32)
+
+    def make_loo_queries(self, n: int) -> np.ndarray:
+        """A FRESH query subsample for the loo_agreement/shard_agreement
+        computation only -- issue #5 / experiment/loo-agreement-nonpinned-
+        queries. Call once per sample round; unlike make_queries(), this
+        draws from a persistent, advancing rng, so consecutive calls return
+        different draws (that's the entire point of the experiment: does
+        detection survive queries that are NOT identical round to round).
+
+        Requires loo_query_mode == 'nonpinned' and make_queries() already
+        called once (to reserve the disjoint held-out pool for --dist sift).
+        """
+        if self.loo_query_mode != "nonpinned":
+            raise RuntimeError("make_loo_queries() called but loo_query_mode is 'pinned'")
+
+        if self._sift_queries is not None:
+            if self._loo_pool_idx is None:
+                raise RuntimeError("make_queries() must be called before make_loo_queries()")
+            pool_idx = self._loo_pool_idx
+            if n > len(pool_idx):
+                raise ValueError(
+                    f"--loo-queries {n} exceeds --loo-pool-size {len(pool_idx)}")
+            pick = self._loo_rng.choice(len(pool_idx), size=n, replace=False)
+            self._loo_draw_count += 1
+            self._loo_seen_idx.update(int(i) for i in pool_idx[pick])
+            return np.ascontiguousarray(self._sift_queries[pool_idx[pick]])
+
+        self._loo_draw_count += 1
+        if self._proj is None:
+            return self._loo_rng.random((n, self.dim), dtype=np.float32) * 2.0 - 1.0
+        z = self._loo_rng.standard_normal((n, self._intrinsic)).astype(np.float32)
+        q = (z @ self._proj) / np.float32(self._intrinsic)
+        q += self._loo_rng.standard_normal((n, self.dim)).astype(np.float32) * np.float32(self._noise)
+        return q.astype(np.float32)
+
+    def loo_pool_coverage(self) -> dict:
+        """Diagnostics for the held-out-pool-size confound (SPEC.md): how
+        much of the reserved pool has actually been drawn from across all
+        rounds so far, and how many rounds happened. A coverage near 1.0
+        with few rounds would mean the pool is being exhausted and rounds
+        are starting to repeat queries -- reintroducing pinning through the
+        back door. --dist sift only; empty dict otherwise."""
+        if self._loo_pool_idx is None:
+            return {}
+        return {
+            "loo_pool_size": int(len(self._loo_pool_idx)),
+            "loo_draw_rounds": self._loo_draw_count,
+            "loo_pool_unique_drawn": len(self._loo_seen_idx),
+            "loo_pool_coverage": (len(self._loo_seen_idx) / len(self._loo_pool_idx)
+                                  if len(self._loo_pool_idx) else float("nan")),
+        }
 
     def intended_set(self, settle_s: float) -> set[str]:
         """Ids confirmed at least `settle_s` ago.
@@ -274,8 +358,18 @@ class RetainingWriter:
 # ---------------------------------------------------------------------------
 
 def sample_once(probes, writer: RetainingWriter, queries: np.ndarray,
-                k: int, settle_s: float, metric: str) -> list[dict]:
-    """One full sweep over every replica. Returns a list of row dicts."""
+                k: int, settle_s: float, metric: str,
+                loo_queries: np.ndarray | None = None) -> list[dict]:
+    """One full sweep over every replica. Returns a list of row dicts.
+
+    loo_queries: when given (experiment/loo-agreement-nonpinned-queries,
+    issue #5), shard_agreement/loo_agreement are computed from a SEPARATE
+    probe against this query set instead of from `queries`'s own top-k --
+    `queries` still drives index_recall/e2e_recall/completeness unchanged.
+    None (default) preserves the original, pinned-query behaviour exactly:
+    agreement is derived from queries' own results, bit-identical to before
+    this parameter existed.
+    """
     t = time.time()
     intended_all = writer.intended_set(settle_s)
     corpus = writer.snapshot_corpus()
@@ -304,11 +398,19 @@ def sample_once(probes, writer: RetainingWriter, queries: np.ndarray,
         ok_ids, local = p.list_local_ids()
         ok_search, obs = (p.search_batch(queries, k_fetch) if ok_ids
                           else (False, []))
+        # Separate round trip against the non-pinned query set, at exactly
+        # k (no over-fetch needed: agreement never scores against ground
+        # truth, only against the other replicas' own answers). Only issued
+        # when loo_queries is set, so the pinned path's round-trip count and
+        # timing are unaffected.
+        ok_loo, loo_obs = ((p.search_batch(loo_queries, k) if ok_ids else (False, []))
+                           if loo_queries is not None else (None, None))
         return p.name, {
             "probe": p,
-            "reachable": bool(ok_ids and ok_search),
+            "reachable": bool(ok_ids and ok_search and (ok_loo is None or ok_loo)),
             "local": local,
             "obs": obs,
+            "loo_obs": loo_obs,
         }
 
     t_probe = time.time()
@@ -334,8 +436,14 @@ def sample_once(probes, writer: RetainingWriter, queries: np.ndarray,
         intended_s = union & intended_all
 
         # Truncated to k: agreement should compare the answer a client would
-        # receive, not the over-fetch tail requested for scoring.
-        live_obs = {n: [o[:k] for o in raw[n]["obs"]] for n in live}
+        # receive, not the over-fetch tail requested for scoring. Under
+        # loo_queries, raw[n]["loo_obs"] is already exactly k long (no
+        # over-fetch was requested for it), so the truncation is a no-op
+        # there -- kept unconditional so both paths share one line.
+        if loo_queries is not None:
+            live_obs = {n: [o[:k] for o in raw[n]["loo_obs"]] for n in live}
+        else:
+            live_obs = {n: [o[:k] for o in raw[n]["obs"]] for n in live}
         agreement = pairwise_agreement(live_obs, k) if len(live) >= 2 else float("nan")
         loo = leave_one_out_agreement(live_obs, k) if len(live) >= 3 else {}
 
@@ -384,10 +492,18 @@ def sample_once(probes, writer: RetainingWriter, queries: np.ndarray,
 
 
 def sampler_loop(stop_evt, probes, writer, queries, k, settle_s, metric,
-                 interval_s, rows_out, errors_out):
+                 interval_s, rows_out, errors_out, loo_queries_n=None):
+    """loo_queries_n: when set (writer.loo_query_mode == 'nonpinned'), a
+    fresh loo_agreement query subsample is drawn every round via
+    writer.make_loo_queries() -- that freshness per round is the entire
+    manipulation issue #5 is testing, so it has to happen here, inside the
+    loop, not once outside it."""
     while not stop_evt.is_set():
         try:
-            rows_out.extend(sample_once(probes, writer, queries, k, settle_s, metric))
+            loo_queries = (writer.make_loo_queries(loo_queries_n)
+                          if loo_queries_n is not None else None)
+            rows_out.extend(sample_once(probes, writer, queries, k, settle_s, metric,
+                                        loo_queries=loo_queries))
         except Exception as e:                    # a sampler crash must not kill the run
             errors_out.append(repr(e))
         stop_evt.wait(interval_s)
@@ -440,12 +556,45 @@ def main() -> int:
     ap.add_argument("--pre-chaos-s", type=float, default=30.0,
                     help="quiesce protocol only: settle-and-sample window "
                          "before faults start, giving a within-run reference")
+    ap.add_argument("--loo-query-mode", default="pinned",
+                    choices=("pinned", "nonpinned"),
+                    help="experiment/loo-agreement-nonpinned-queries (issue "
+                         "#5): 'pinned' (default) is the original, unchanged "
+                         "behaviour -- shard_agreement/loo_agreement are "
+                         "computed from the same pinned query set as "
+                         "index_recall. 'nonpinned' instead draws a fresh "
+                         "query subsample every sample round, from a "
+                         "held-out pool disjoint from the ground-truth "
+                         "query set, for the agreement metrics only.")
+    ap.add_argument("--loo-queries", type=int, default=None,
+                    help="--loo-query-mode nonpinned only: queries drawn "
+                         "per round (default: same as --queries, for a "
+                         "like-for-like comparison against the pinned "
+                         "result)")
+    ap.add_argument("--loo-pool-size", type=int, default=3000,
+                    help="--loo-query-mode nonpinned --dist sift only: size "
+                         "of the held-out query pool reserved (disjoint "
+                         "from --queries) to subsample from each round -- "
+                         "see SPEC.md's held-out-pool-size confound")
     args = ap.parse_args()
 
     if args.chaos_duration is not None and args.no_chaos:
         print("ERROR: --chaos-duration and --no-chaos are contradictory.",
               file=sys.stderr)
         return 1
+
+    if args.loo_query_mode == "nonpinned" and args.dist == "sift":
+        loo_n = args.loo_queries if args.loo_queries is not None else args.queries
+        if loo_n > args.loo_pool_size:
+            print(f"ERROR: --loo-queries {loo_n} exceeds --loo-pool-size "
+                  f"{args.loo_pool_size}.", file=sys.stderr)
+            return 1
+        if args.queries + args.loo_pool_size > 10_000:
+            print(f"ERROR: --queries {args.queries} + --loo-pool-size "
+                  f"{args.loo_pool_size} exceeds SIFT1M's 10,000-query set "
+                  f"(they must stay disjoint -- see SPEC.md's "
+                  f"ground-truth-leakage confound).", file=sys.stderr)
+            return 1
 
     if not os.path.exists(ch.SHARD_NODE_BIN) or not os.path.exists(ch.COORDINATOR_BIN):
         print(f"ERROR: binaries not found ({ch.SHARD_NODE_BIN}, "
@@ -468,8 +617,13 @@ def main() -> int:
     # purely so the queries can come from it; it touches no cluster state.
     writer = RetainingWriter(ch.VECTOR_DIM, args.seed, dist=args.dist,
                              sift_dir=args.sift_dir,
-                             sift_vectors=args.sift_vectors)
+                             sift_vectors=args.sift_vectors,
+                             loo_query_mode=args.loo_query_mode,
+                             loo_pool_size=args.loo_pool_size)
     queries = writer.make_queries(args.queries)
+    loo_queries_n = (
+        (args.loo_queries if args.loo_queries is not None else args.queries)
+        if args.loo_query_mode == "nonpinned" else None)
 
     shutil.rmtree(ch.RUN_DIR, ignore_errors=True)
     ch.write_initial_configs()
@@ -525,6 +679,7 @@ def main() -> int:
         target=sampler_loop,
         args=(stop_evt, probes, writer, queries, args.k, args.settle_s,
               args.metric, args.sample_interval, rows, sampler_errors),
+        kwargs={"loo_queries_n": loo_queries_n},
         daemon=True)
     st.start()
     threads.append(st)
@@ -684,6 +839,10 @@ def main() -> int:
         "write_attempted": writer.attempted,
         "write_failed": writer.failed,
         "sampler_errors": sampler_errors[:20],
+        "loo_query_mode": args.loo_query_mode,
+        "loo_queries": loo_queries_n,
+        "loo_pool_size": args.loo_pool_size if args.loo_query_mode == "nonpinned" else None,
+        "loo_pool_coverage": writer.loo_pool_coverage() or None,
     }
     with open(os.path.join(RESULTS_DIR, "run_meta.json"), "w") as f:
         json.dump(meta, f, indent=2)
