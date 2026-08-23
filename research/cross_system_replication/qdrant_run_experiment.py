@@ -1,0 +1,596 @@
+"""
+Cross-system replica-recall experiment: Qdrant.
+
+Answers the question in SPEC.md by running the exact same measurement core
+(`metrics.py`, reused unmodified per the isolation rule) against a live
+Qdrant cluster instead of nano-db, using qdrant_probe.py's direct
+per-replica gRPC path in place of probe.py's ShardService client, and
+qdrant_docker_harness.py's Docker container kill/restart in place of
+chaos_harness.py's bare-process kill/restart.
+
+This file deliberately mirrors research/replica_recall/run_experiment.py's
+structure (RetainingWriter -> sample_once -> sampler_loop -> main) rather
+than being written from scratch, so a reader who already understands the
+nano-db experiment can follow this one by its differences, not learn it
+cold. The differences that matter are: (1) the writer speaks Qdrant's REST
+API in small batches rather than nano-db's one-point-per-request HTTP
+endpoint -- batching only, not a behavioral change to what gets measured;
+(2) chaos targets containers, not processes; (3) the intended-set/shard
+semantics come from qdrant_probe's Scroll-based ListLocalIds equivalent.
+
+Run (after `docker compose` access and `pip install grpcio grpcio-tools
+qdrant-client numpy`):
+    python research/cross_system_replication/qdrant_run_experiment.py --duration 180
+
+Outputs:
+    research/cross_system_replication/results/samples.csv
+    research/cross_system_replication/results/events.json
+    research/cross_system_replication/results/run_meta.json
+"""
+
+from __future__ import annotations
+
+import argparse
+import csv
+import json
+import os
+import random
+import subprocess
+import sys
+import threading
+import time
+from concurrent.futures import ThreadPoolExecutor
+
+import numpy as np
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+ROOT = os.path.abspath(os.path.join(HERE, "..", ".."))
+REPLICA_RECALL_DIR = os.path.join(ROOT, "research", "replica_recall")
+sys.path.insert(0, HERE)
+sys.path.insert(0, REPLICA_RECALL_DIR)
+
+import qdrant_topology as topo                                    # noqa: E402
+import qdrant_docker_harness as dh                                # noqa: E402
+import qdrant_probe as probe_mod                                  # noqa: E402
+from metrics import (                                             # noqa: E402
+    Corpus, score_replica, pairwise_agreement, leave_one_out_agreement,
+)
+import sift                                                       # noqa: E402
+
+RESULTS_DIR = os.path.join(HERE, "results")
+PROTO_DIR = os.path.join(HERE, "proto")
+
+
+# ---------------------------------------------------------------------------
+# Writer that retains its vectors -- identical role to run_experiment.py's
+# RetainingWriter, batched over Qdrant's REST upsert instead of one HTTP
+# POST per vector.
+# ---------------------------------------------------------------------------
+
+class RetainingWriter:
+    def __init__(self, dim: int, seed: int, dist: str = "sift",
+                 intrinsic_dim: int = 12, noise: float = 0.02,
+                 sift_dir: str | None = None, sift_vectors: int = 200_000,
+                 batch_size: int = 32):
+        self.dim = dim
+        self.batch_size = batch_size
+        self.lock = threading.Lock()
+        self.vector_of: dict[str, np.ndarray] = {}
+        self.confirmed_at: dict[str, float] = {}
+        self.attempted = 0
+        self.failed = 0
+        self._next = 0
+        self._corpus_ids: list[str] = []
+        self._corpus_mat = np.empty((0, dim), dtype=np.float32)
+        self._corpus_row: dict[str, int] = {}
+        self._corpus_n = 0
+        self._seed = seed
+        self._dist = dist
+        self._intrinsic = intrinsic_dim
+        self._noise = noise
+
+        self._tls = threading.local()
+        self._thread_counter = 0
+
+        self._sift_base: np.ndarray | None = None
+        self._sift_queries: np.ndarray | None = None
+        self._sift_order: np.ndarray | None = None
+        self.exhausted = False
+
+        if dist == "sift":
+            self._proj = None
+            base, queries = sift.load(sift_dir, n_base=sift_vectors, dim=dim)
+            self._sift_base = base
+            self._sift_queries = queries
+            self._sift_order = np.random.default_rng(
+                [seed, 0x51F7]).permutation(len(base))
+        elif dist == "uniform":
+            self._proj = None
+        elif dist == "lowdim":
+            proj_rng = np.random.default_rng([seed, 0xC0FFEE])
+            self._proj = proj_rng.standard_normal(
+                (intrinsic_dim, dim)).astype(np.float32)
+        else:
+            raise ValueError(f"unknown --dist: {dist!r}")
+
+    def _rng(self):
+        r = getattr(self._tls, "rng", None)
+        if r is None:
+            with self.lock:
+                idx = self._thread_counter
+                self._thread_counter += 1
+            r = np.random.default_rng([self._seed, idx])
+            self._tls.rng = r
+        return r
+
+    def _make_batch(self, n: int) -> list[tuple[str, np.ndarray]]:
+        """Up to n (id, vector) pairs. Shorter than n once a finite corpus
+        (--dist sift) is exhausted; empty means exhausted."""
+        with self.lock:
+            start = self._next
+            if self._sift_base is not None:
+                n = min(n, len(self._sift_order) - start)
+            self._next += max(n, 0)
+
+        if n <= 0:
+            if self._sift_base is not None:
+                with self.lock:
+                    self.exhausted = True
+            return []
+
+        out = []
+        if self._sift_base is not None:
+            for i in range(start, start + n):
+                vid = f"{100_000_000 + i}"      # numeric id, see qdrant_probe.py
+                out.append((vid, self._sift_base[self._sift_order[i]]))
+            return out
+
+        rng = self._rng()
+        for i in range(start, start + n):
+            vid = f"{100_000_000 + i}"
+            if self._proj is None:
+                vec = rng.random(self.dim, dtype=np.float32) * 2.0 - 1.0
+            else:
+                z = rng.standard_normal(self._intrinsic).astype(np.float32)
+                vec = (z @ self._proj) / np.float32(self._intrinsic)
+                vec += rng.standard_normal(self.dim).astype(np.float32) * np.float32(self._noise)
+            out.append((vid, vec.astype(np.float32)))
+        return out
+
+    def loop(self, stop_evt: threading.Event, node_ids: list[int]) -> None:
+        while not stop_evt.is_set():
+            batch = self._make_batch(self.batch_size)
+            if not batch:
+                print("[writer] corpus pool exhausted -- stopping this writer. "
+                      "Raise --sift-vectors.", flush=True)
+                return
+            with self.lock:
+                self.attempted += len(batch)
+            points = [
+                {"id": int(vid), "vector": [float(x) for x in vec]}
+                for vid, vec in batch
+            ]
+            try:
+                port = topo.http_port(random.choice(node_ids))
+                status, _ = topo.http_request(
+                    port, "PUT", f"/collections/{topo.COLLECTION}/points?wait=true",
+                    {"points": points}, timeout=10.0)
+                if status == 200:
+                    t = time.time()
+                    with self.lock:
+                        for vid, vec in batch:
+                            self.vector_of[vid] = vec
+                            self.confirmed_at[vid] = t
+                            self._append_corpus(vid, vec)
+                else:
+                    with self.lock:
+                        self.failed += len(batch)
+            except Exception:
+                with self.lock:
+                    self.failed += len(batch)
+            time.sleep(0.02)
+
+    def make_queries(self, n: int) -> np.ndarray:
+        qrng = np.random.default_rng([self._seed, 0xDEC0DE])
+        if self._sift_queries is not None:
+            pool = self._sift_queries
+            if n > len(pool):
+                raise ValueError(
+                    f"--queries {n} exceeds the {len(pool)} SIFT query vectors")
+            pick = qrng.choice(len(pool), size=n, replace=False)
+            return np.ascontiguousarray(pool[np.sort(pick)])
+        if self._proj is None:
+            return qrng.random((n, self.dim), dtype=np.float32) * 2.0 - 1.0
+        z = qrng.standard_normal((n, self._intrinsic)).astype(np.float32)
+        q = (z @ self._proj) / np.float32(self._intrinsic)
+        q += qrng.standard_normal((n, self.dim)).astype(np.float32) * np.float32(self._noise)
+        return q.astype(np.float32)
+
+    def intended_set(self, settle_s: float) -> set[str]:
+        cutoff = time.time() - settle_s
+        with self.lock:
+            return {i for i, t in self.confirmed_at.items() if t <= cutoff}
+
+    def _append_corpus(self, vid: str, vec: np.ndarray) -> None:
+        if self._corpus_n == len(self._corpus_mat):
+            new_cap = max(1024, len(self._corpus_mat) * 2)
+            grown = np.empty((new_cap, self.dim), dtype=np.float32)
+            grown[:self._corpus_n] = self._corpus_mat[:self._corpus_n]
+            self._corpus_mat = grown
+        self._corpus_mat[self._corpus_n] = vec
+        self._corpus_row[vid] = self._corpus_n
+        self._corpus_ids.append(vid)
+        self._corpus_n += 1
+
+    def snapshot_corpus(self) -> Corpus:
+        with self.lock:
+            return Corpus(self._corpus_ids, self._corpus_mat,
+                          self._corpus_row, self._corpus_n)
+
+
+# ---------------------------------------------------------------------------
+# Sampler -- identical logic to run_experiment.py's sample_once/sampler_loop,
+# against qdrant_probe.ReplicaProbe instead of probe.ReplicaProbe.
+# ---------------------------------------------------------------------------
+
+def sample_once(probes, writer: RetainingWriter, queries: np.ndarray,
+                k: int, settle_s: float, metric: str) -> list[dict]:
+    t = time.time()
+    intended_all = writer.intended_set(settle_s)
+    corpus = writer.snapshot_corpus()
+    k_fetch = k * 3
+
+    def _probe_one(p):
+        ok_ids, local = p.list_local_ids()
+        ok_search, obs = (p.search_batch(queries, k_fetch) if ok_ids
+                          else (False, []))
+        return p.name, {
+            "probe": p, "reachable": bool(ok_ids and ok_search),
+            "local": local, "obs": obs,
+        }
+
+    t_probe = time.time()
+    raw: dict[str, dict] = {}
+    with ThreadPoolExecutor(max_workers=max(1, len(probes))) as ex:
+        for name, rec in ex.map(_probe_one, probes):
+            raw[name] = rec
+    probe_s = time.time() - t_probe
+    t_score = time.time()
+
+    by_shard: dict[int, list[str]] = {}
+    for name, r in raw.items():
+        by_shard.setdefault(r["probe"].shard_id, []).append(name)
+
+    rows: list[dict] = []
+    for shard_id, names in sorted(by_shard.items()):
+        live = [n for n in names if raw[n]["reachable"]]
+        union = set()
+        for n in live:
+            union |= raw[n]["local"]
+        intended_s = union & intended_all
+
+        live_obs = {n: [o[:k] for o in raw[n]["obs"]] for n in live}
+        agreement = pairwise_agreement(live_obs, k) if len(live) >= 2 else float("nan")
+        loo = leave_one_out_agreement(live_obs, k) if len(live) >= 3 else {}
+
+        intended_rows = corpus.rows_for(intended_s)
+
+        for n in names:
+            r = raw[n]
+            p = r["probe"]
+            if not r["reachable"]:
+                rows.append({
+                    "t": t, "shard": shard_id, "replica": p.replica_id,
+                    "name": n, "reachable": 0,
+                    "index_recall": "", "e2e_recall": "", "completeness": "",
+                    "n_local": "", "n_intended": len(intended_s),
+                    "shard_agreement": "" if np.isnan(agreement) else round(agreement, 6),
+                    "loo_agreement": "",
+                    "n_confirmed_settled": len(intended_all),
+                })
+                continue
+
+            m = score_replica(queries, r["obs"], r["local"], intended_s,
+                              corpus, k, metric, intended_rows=intended_rows)
+
+            def fmt(x: float) -> str:
+                return "" if np.isnan(x) else f"{x:.6f}"
+
+            rows.append({
+                "t": t, "shard": shard_id, "replica": p.replica_id,
+                "name": n, "reachable": 1,
+                "index_recall": fmt(m["index_recall"]),
+                "e2e_recall": fmt(m["e2e_recall"]),
+                "completeness": fmt(m["completeness"]),
+                "n_local": int(m["n_local"]),
+                "n_intended": int(m["n_intended"]),
+                "shard_agreement": "" if np.isnan(agreement) else round(agreement, 6),
+                "loo_agreement": ("" if np.isnan(loo.get(n, float("nan")))
+                                  else round(loo[n], 6)),
+                "n_confirmed_settled": len(intended_all),
+                "probe_s": round(probe_s, 3),
+                "score_s": round(time.time() - t_score, 3),
+            })
+    return rows
+
+
+def sampler_loop(stop_evt, probes, writer, queries, k, settle_s, metric,
+                 interval_s, rows_out, errors_out):
+    while not stop_evt.is_set():
+        try:
+            rows_out.extend(sample_once(probes, writer, queries, k, settle_s, metric))
+        except Exception as e:
+            errors_out.append(repr(e))
+        stop_evt.wait(interval_s)
+
+
+# ---------------------------------------------------------------------------
+# Cluster bring-up / teardown
+# ---------------------------------------------------------------------------
+
+def bring_up_cluster(node_ids) -> bool:
+    subprocess.run(["docker", "compose", "-p", topo.PROJECT, "-f", topo.COMPOSE_PATH,
+                    "down", "-v"], capture_output=True)
+    topo.write_compose_file()
+    r = subprocess.run(["docker", "compose", "-p", topo.PROJECT, "-f", topo.COMPOSE_PATH,
+                        "up", "-d"], capture_output=True, text=True)
+    if r.returncode != 0:
+        print(f"[qrr] FATAL: docker compose up failed:\n{r.stderr}", file=sys.stderr)
+        return False
+    if not topo.wait_for_nodes_ready(node_ids):
+        print("[qrr] FATAL: nodes never became ready", file=sys.stderr)
+        return False
+    if not topo.wait_for_cluster_formed(node_ids):
+        print("[qrr] FATAL: cluster never formed (peers did not converge)", file=sys.stderr)
+        return False
+    if not topo.create_collection():
+        print("[qrr] FATAL: collection creation failed", file=sys.stderr)
+        return False
+    if not topo.wait_for_shards_active(node_ids):
+        print("[qrr] FATAL: shards never became Active", file=sys.stderr)
+        return False
+    return True
+
+
+def tear_down_cluster() -> None:
+    subprocess.run(["docker", "compose", "-p", topo.PROJECT, "-f", topo.COMPOSE_PATH,
+                    "down", "-v"], capture_output=True)
+
+
+# ---------------------------------------------------------------------------
+
+def main() -> int:
+    ap = argparse.ArgumentParser(description=__doc__,
+                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--duration", type=int, default=180)
+    ap.add_argument("--writers", type=int, default=4)
+    ap.add_argument("--queries", type=int, default=100)
+    ap.add_argument("--k", type=int, default=10)
+    ap.add_argument("--sample-interval", type=float, default=5.0)
+    ap.add_argument("--settle-s", type=float, default=3.0,
+                    help="widened vs. nano-db's 2.0s default -- Qdrant's "
+                         "own replication path adds latency the direct "
+                         "gRPC write path in nano-db does not have")
+    ap.add_argument("--warmup-s", type=float, default=20.0)
+    ap.add_argument("--metric", default="l2", choices=("l2", "ip"))
+    ap.add_argument("--dist", default="sift", choices=("uniform", "lowdim", "sift"))
+    ap.add_argument("--sift-dir", default=None)
+    ap.add_argument("--sift-vectors", type=int, default=200_000)
+    ap.add_argument("--seed", type=int, default=20260808)
+    ap.add_argument("--no-chaos", action="store_true")
+    ap.add_argument("--chaos-duration", type=int, default=None)
+    ap.add_argument("--pre-chaos-s", type=float, default=30.0)
+    ap.add_argument("--batch-size", type=int, default=32,
+                    help="points per REST upsert call (writer efficiency "
+                         "only, does not change what is measured)")
+    args = ap.parse_args()
+
+    if args.chaos_duration is not None and args.no_chaos:
+        print("ERROR: --chaos-duration and --no-chaos are contradictory.", file=sys.stderr)
+        return 1
+
+    probe_mod.ensure_stubs(PROTO_DIR)
+
+    random.seed(args.seed)
+    os.makedirs(RESULTS_DIR, exist_ok=True)
+
+    writer = RetainingWriter(topo.VECTOR_DIM, args.seed, dist=args.dist,
+                             sift_dir=args.sift_dir, sift_vectors=args.sift_vectors,
+                             batch_size=args.batch_size)
+    queries = writer.make_queries(args.queries)
+
+    node_ids = list(range(topo.REPLICAS_PER_SHARD))
+    print(f"[qrr] bringing up {len(node_ids)}-node Qdrant cluster "
+          f"({topo.NUM_SHARDS}x{topo.REPLICAS_PER_SHARD}, image={topo.QDRANT_IMAGE})...")
+    try:
+        # try/finally starts BEFORE bring_up_cluster, not after: its own
+        # polling calls (wait_for_nodes_ready, create_collection, ...) can
+        # themselves raise -- a bare socket.TimeoutError under host resource
+        # contention, seen in practice -- and a bring-up that dies without
+        # this leaves the Qdrant containers running, which then breaks
+        # every later run in a sweep by squatting on qdrant_topology.py's
+        # fixed ports. Two consecutive sweep runs failed exactly this way
+        # and had to be torn down and re-run by hand before this fix.
+        if not bring_up_cluster(node_ids):
+            return 1
+        print("[qrr] cluster ready, collection created, shards Active")
+        return _run_experiment_body(args, writer, queries, node_ids)
+    finally:
+        print("\n[qrr] teardown...")
+        tear_down_cluster()
+
+
+def _run_experiment_body(args, writer, queries, node_ids) -> int:
+    containers = dh.build_containers(node_ids)
+    probes = probe_mod.build_probes(topo.NUM_SHARDS, topo.REPLICAS_PER_SHARD,
+                                    topo.COLLECTION, topo.probe_port_fn)
+
+    stop_evt = threading.Event()
+    rows: list[dict] = []
+    sampler_errors: list[str] = []
+    chaos_events: list[dict] = []
+    violations: list = []
+    checks_run = [0]
+    threads: list[threading.Thread] = []
+
+    for _ in range(args.writers):
+        t = threading.Thread(target=writer.loop, args=(stop_evt, node_ids), daemon=True)
+        t.start()
+        threads.append(t)
+
+    t_start = time.time()
+    print(f"[qrr] warmup {args.warmup_s:.0f}s (writing, no faults)...")
+    time.sleep(args.warmup_s)
+
+    st = threading.Thread(
+        target=sampler_loop,
+        args=(stop_evt, probes, writer, queries, args.k, args.settle_s,
+              args.metric, args.sample_interval, rows, sampler_errors),
+        daemon=True)
+    st.start()
+    threads.append(st)
+
+    vt = threading.Thread(target=dh.validator_loop,
+                          args=(stop_evt, node_ids, violations, checks_run), daemon=True)
+    vt.start()
+    threads.append(vt)
+
+    chaos_start_rel = None
+    chaos_stop_rel = None
+    chaos_stop_evt = threading.Event()
+
+    try:
+        if args.no_chaos:
+            print(f"[qrr] baseline (no chaos), running {args.duration}s...")
+            time.sleep(args.duration)
+
+        elif args.chaos_duration is None:
+            ct = threading.Thread(target=dh.chaos_loop,
+                                  args=(stop_evt, containers, chaos_events), daemon=True)
+            ct.start()
+            threads.append(ct)
+            chaos_start_rel = time.time() - t_start
+            print(f"[qrr] chaos ON for the whole run, {args.duration}s...")
+            time.sleep(args.duration)
+            chaos_stop_rel = time.time() - t_start
+
+        else:
+            pre = args.pre_chaos_s
+            post = args.duration - pre - args.chaos_duration
+            if post <= 0:
+                print(f"[qrr] FATAL: --duration {args.duration} leaves no quiesce "
+                      f"window after --pre-chaos-s {pre} + --chaos-duration "
+                      f"{args.chaos_duration}.", file=sys.stderr)
+                stop_evt.set()
+                tear_down_cluster()
+                return 1
+
+            print(f"[qrr] phase 1/3: {pre:.0f}s settling, no faults...")
+            time.sleep(pre)
+
+            ct = threading.Thread(target=dh.chaos_loop,
+                                  args=(chaos_stop_evt, containers, chaos_events), daemon=True)
+            ct.start()
+            threads.append(ct)
+            chaos_start_rel = time.time() - t_start
+            print(f"[qrr] phase 2/3: {args.chaos_duration:.0f}s chaos...")
+            time.sleep(args.chaos_duration)
+
+            chaos_stop_evt.set()
+            ct.join(timeout=20.0)
+
+            revived = 0
+            for name, c in containers.items():
+                if not c.is_alive():
+                    c.start()
+                    revived += 1
+            chaos_stop_rel = time.time() - t_start
+            if revived:
+                print(f"[qrr]   ({revived} container(s) restarted at chaos stop)")
+
+            print(f"[qrr] phase 3/3: {post:.0f}s quiesce -- faults stopped, "
+                  f"watching for recovery...")
+            time.sleep(post)
+
+    except KeyboardInterrupt:
+        print("\n[qrr] interrupted, shutting down early")
+
+    chaos_stop_evt.set()
+    stop_evt.set()
+    for t in threads:
+        t.join(timeout=10.0)
+
+    for p in probes:
+        p.close()
+
+    cols = ["t_rel", "shard", "replica", "name", "reachable",
+            "index_recall", "e2e_recall", "completeness",
+            "n_local", "n_intended", "shard_agreement", "loo_agreement",
+            "n_confirmed_settled", "probe_s", "score_s"]
+    extra = sorted({k for r in rows for k in r} - set(cols) - {"t"})
+    if extra:
+        print(f"[qrr] note: sampler emitted columns missing from the canonical "
+              f"list, appending: {', '.join(extra)}")
+        cols = cols + extra
+    csv_path = os.path.join(RESULTS_DIR, "samples.csv")
+    with open(csv_path, "w", newline="") as f:
+        w = csv.DictWriter(f, fieldnames=cols)
+        w.writeheader()
+        for r in rows:
+            r = dict(r)
+            r["t_rel"] = round(r.pop("t") - t_start, 3)
+            w.writerow(r)
+
+    with open(os.path.join(RESULTS_DIR, "events.json"), "w") as f:
+        json.dump([{**e, "t_rel": round(e["t"] - t_start, 3)} for e in chaos_events],
+                  f, indent=2)
+
+    meta = {
+        "system": "qdrant",
+        "qdrant_image": topo.QDRANT_IMAGE,
+        "duration_s": args.duration,
+        "writers": args.writers,
+        "queries": args.queries,
+        "k": args.k,
+        "sample_interval_s": args.sample_interval,
+        "settle_s": args.settle_s,
+        "warmup_s": args.warmup_s,
+        "metric": args.metric,
+        "dist": args.dist,
+        "sift_vectors": args.sift_vectors if args.dist == "sift" else None,
+        "corpus_exhausted": writer.exhausted,
+        "seed": args.seed,
+        "chaos": not args.no_chaos,
+        "chaos_duration_s": args.chaos_duration,
+        "pre_chaos_s": args.pre_chaos_s if args.chaos_duration else None,
+        "chaos_start_rel": (round(chaos_start_rel, 3) if chaos_start_rel is not None else None),
+        "chaos_stop_rel": (round(chaos_stop_rel, 3) if chaos_stop_rel is not None else None),
+        "quiesce": args.chaos_duration is not None,
+        "num_shards": topo.NUM_SHARDS,
+        "replicas_per_shard": topo.REPLICAS_PER_SHARD,
+        "vector_dim": topo.VECTOR_DIM,
+        "samples": len(rows),
+        "chaos_events": len(chaos_events),
+        "confirmed_total": len(writer.vector_of),
+        "write_attempted": writer.attempted,
+        "write_failed": writer.failed,
+        "sampler_errors": sampler_errors[:20],
+        "raft_checks_run": checks_run[0],
+        "raft_violations": [repr(v) for v in violations],
+    }
+    with open(os.path.join(RESULTS_DIR, "run_meta.json"), "w") as f:
+        json.dump(meta, f, indent=2)
+
+    print(f"[qrr] {len(rows)} samples, {len(chaos_events)} chaos events, "
+          f"{len(writer.vector_of)} vectors confirmed")
+    if sampler_errors:
+        print(f"[qrr] WARNING: {len(sampler_errors)} sampler errors, "
+              f"first: {sampler_errors[0]}")
+    if violations:
+        print(f"[qrr] WARNING: {len(violations)} raft split-brain violations")
+    print(f"[qrr] wrote {csv_path}")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
