@@ -402,11 +402,25 @@ def main() -> int:
     node_ids = list(range(topo.REPLICAS_PER_SHARD))
     print(f"[qrr] bringing up {len(node_ids)}-node Qdrant cluster "
           f"({topo.NUM_SHARDS}x{topo.REPLICAS_PER_SHARD}, image={topo.QDRANT_IMAGE})...")
-    if not bring_up_cluster(node_ids):
+    try:
+        # try/finally starts BEFORE bring_up_cluster, not after: its own
+        # polling calls (wait_for_nodes_ready, create_collection, ...) can
+        # themselves raise -- a bare socket.TimeoutError under host resource
+        # contention, seen in practice -- and a bring-up that dies without
+        # this leaves the Qdrant containers running, which then breaks
+        # every later run in a sweep by squatting on qdrant_topology.py's
+        # fixed ports. Two consecutive sweep runs failed exactly this way
+        # and had to be torn down and re-run by hand before this fix.
+        if not bring_up_cluster(node_ids):
+            return 1
+        print("[qrr] cluster ready, collection created, shards Active")
+        return _run_experiment_body(args, writer, queries, node_ids)
+    finally:
+        print("\n[qrr] teardown...")
         tear_down_cluster()
-        return 1
-    print("[qrr] cluster ready, collection created, shards Active")
 
+
+def _run_experiment_body(args, writer, queries, node_ids) -> int:
     containers = dh.build_containers(node_ids)
     probes = probe_mod.build_probes(topo.NUM_SHARDS, topo.REPLICAS_PER_SHARD,
                                     topo.COLLECTION, topo.probe_port_fn)
@@ -566,9 +580,6 @@ def main() -> int:
     }
     with open(os.path.join(RESULTS_DIR, "run_meta.json"), "w") as f:
         json.dump(meta, f, indent=2)
-
-    print("\n[qrr] teardown...")
-    tear_down_cluster()
 
     print(f"[qrr] {len(rows)} samples, {len(chaos_events)} chaos events, "
           f"{len(writer.vector_of)} vectors confirmed")

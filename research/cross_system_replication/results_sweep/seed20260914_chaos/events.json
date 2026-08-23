@@ -1,0 +1,66 @@
+[
+  {
+    "t": 1787493353.3312132,
+    "target": "rrd-qdrant-node1",
+    "alive_after_restart": true,
+    "down_for_s": 4.9562824769670915,
+    "restart_count": 0,
+    "t_rel": 17.311
+  },
+  {
+    "t": 1787493367.2974982,
+    "target": "rrd-qdrant-node0",
+    "alive_after_restart": true,
+    "down_for_s": 1.4616388815151717,
+    "restart_count": 0,
+    "t_rel": 31.277
+  },
+  {
+    "t": 1787493376.8911593,
+    "target": "rrd-qdrant-node1",
+    "alive_after_restart": true,
+    "down_for_s": 3.784630775599439,
+    "restart_count": 0,
+    "t_rel": 40.871
+  },
+  {
+    "t": 1787493395.609589,
+    "target": "rrd-qdrant-node0",
+    "alive_after_restart": true,
+    "down_for_s": 1.8519558961726346,
+    "restart_count": 0,
+    "t_rel": 59.589
+  },
+  {
+    "t": 1787493410.1784081,
+    "target": "rrd-qdrant-node1",
+    "alive_after_restart": true,
+    "down_for_s": 1.283377199874233,
+    "restart_count": 0,
+    "t_rel": 74.158
+  },
+  {
+    "t": 1787493420.9843092,
+    "target": "rrd-qdrant-node2",
+    "alive_after_restart": true,
+    "down_for_s": 1.5218772698665235,
+    "restart_count": 0,
+    "t_rel": 84.964
+  },
+  {
+    "t": 1787493431.5970364,
+    "target": "rrd-qdrant-node0",
+    "alive_after_restart": true,
+    "down_for_s": 6.064239363842232,
+    "restart_count": 0,
+    "t_rel": 95.577
+  },
+  {
+    "t": 1787493448.5376744,
+    "target": "rrd-qdrant-node2",
+    "alive_after_restart": true,
+    "down_for_s": 4.110926304349265,
+    "restart_count": 0,
+    "t_rel": 112.517
+  }
+]
