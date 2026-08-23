@@ -1,0 +1,137 @@
+name: Research question
+description: >-
+  Propose one research question, experiment, analysis, method, or reproduction
+  as a pre-registered spec. This issue IS the spec — the implementer copies
+  its body into SPEC.md as the branch's first commit, per research/GIT_WORKFLOW.md.
+  Do not open this to report a bug or propose an implementation without a
+  research question behind it.
+title: "[research] "
+labels: ["stage:proposed"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Before filing: check the top-level `README.md`'s **Open research questions / next experiments**
+        section, `research/README.md`'s experiment index, and `research/DECISION_LOG.md` — don't
+        re-propose something already open, in progress, or already ruled out. See
+        `research/AGENT_PIPELINE.md` for the full researcher workflow.
+
+  - type: dropdown
+    id: type
+    attributes:
+      label: Type
+      description: Matches research/GIT_WORKFLOW.md's branch prefixes — pick the branch this issue implies.
+      options:
+        - research (substantial investigation, spans several experiments)
+        - experiment (one specific, narrowly-scoped experiment)
+        - analysis (analysis of an existing result, no new data collection)
+        - method (a new methodological component — metric, detector, protocol)
+        - reproduction (reproducing an external paper, benchmark, or system)
+    validations:
+      required: true
+
+  - type: textarea
+    id: research-question
+    attributes:
+      label: Research question
+      description: What are we trying to determine? One or two sentences, specific enough to be answerable.
+    validations:
+      required: true
+
+  - type: textarea
+    id: hypothesis
+    attributes:
+      label: Hypothesis
+      description: What do we currently expect, and why?
+    validations:
+      required: true
+
+  - type: textarea
+    id: null-hypothesis
+    attributes:
+      label: Null / alternative hypothesis
+      description: >-
+        What result would contradict the hypothesis above? Be concrete enough
+        that a result could actually fail to support it — "nothing happens"
+        is rarely a real null hypothesis on its own; say what "nothing
+        happens" would look like in the actual metric.
+    validations:
+      required: true
+
+  - type: textarea
+    id: motivation
+    attributes:
+      label: Motivation
+      description: >-
+        Why does this question matter for the project's research thesis
+        (top-level README.md)? What would change if it were answered either way?
+    validations:
+      required: true
+
+  - type: textarea
+    id: experimental-design
+    attributes:
+      label: Experimental design
+      description: >-
+        How will this be tested? System(s), topology, fault model, dataset,
+        query workload, what varies and what's held constant.
+    validations:
+      required: true
+
+  - type: textarea
+    id: metrics
+    attributes:
+      label: Metrics
+      description: What is actually measured, and which of those measurements decide the outcome.
+    validations:
+      required: true
+
+  - type: textarea
+    id: baselines
+    attributes:
+      label: Baselines / controls
+      description: >-
+        What is this compared against? Note if a no-fault / no-treatment
+        baseline is required to establish a noise floor before the treatment
+        condition means anything.
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected-outcomes
+    attributes:
+      label: Expected outcomes
+      description: >-
+        Enumerate the plausible outcomes, not just the hoped-for one — e.g.
+        "(a) effect present and detectable, (b) effect present but below
+        detection threshold, (c) no effect, (d) effect present but confounded by X."
+    validations:
+      required: true
+
+  - type: textarea
+    id: interpretation-plan
+    attributes:
+      label: Interpretation plan
+      description: >-
+        For each outcome above: what would it mean, and what would it NOT
+        mean? What follow-up would each outcome imply?
+    validations:
+      required: true
+
+  - type: textarea
+    id: confounds
+    attributes:
+      label: Confounds considered
+      description: What could produce a false positive or false negative here, and how (if at all) is it controlled for?
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before submitting
+      options:
+        - label: I checked README.md's "Open research questions" and research/DECISION_LOG.md and this isn't a duplicate or already-ruled-out question.
+          required: true
+        - label: This is one answerable question, not a broad restatement of the whole research thesis.
+          required: true
