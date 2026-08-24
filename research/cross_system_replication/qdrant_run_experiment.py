@@ -328,6 +328,43 @@ def sampler_loop(stop_evt, probes, writer, queries, k, settle_s, metric,
 # Cluster bring-up / teardown
 # ---------------------------------------------------------------------------
 
+def telemetry_loop(stop_evt, node_ids, interval_s, rows_out, errors_out):
+    """experiment/qdrant-optimizer-masking-index-recall (issue #8): polls
+    each node's own `/collections/{name}` view -- indexed_vectors_count,
+    segments_count, status -- at the same cadence as the probe sampler, so
+    HNSW-indexing progress can be correlated against index_recall samples
+    after the run. Qdrant's segment-merge/optimizer activity does not show
+    up in container logs at INFO or DEBUG level (checked manually before
+    building this), but this REST endpoint tracks it directly and reliably.
+
+    Deliberately its own thread/CSV rather than folded into sample_once():
+    this is diagnostic instrumentation for one specific confound check, not
+    part of the measurement core that other branches' analyze.py depends
+    on -- keeping it separate means enabling it can never change samples.csv's
+    schema or behavior on runs that don't ask for it.
+    """
+    while not stop_evt.is_set():
+        t = time.time()
+        for n in node_ids:
+            try:
+                status, body = topo.http_request(
+                    topo.http_port(n), "GET", f"/collections/{topo.COLLECTION}",
+                    timeout=2.0)
+                if status == 200:
+                    res = body.get("result", {})
+                    rows_out.append({
+                        "t": t, "node": n,
+                        "indexed_vectors_count": res.get("indexed_vectors_count"),
+                        "points_count": res.get("points_count"),
+                        "segments_count": res.get("segments_count"),
+                        "status": res.get("status"),
+                        "optimizer_status": res.get("optimizer_status"),
+                    })
+            except Exception as e:
+                errors_out.append(repr(e))
+        stop_evt.wait(interval_s)
+
+
 def bring_up_cluster(node_ids) -> bool:
     subprocess.run(["docker", "compose", "-p", topo.PROJECT, "-f", topo.COMPOSE_PATH,
                     "down", "-v"], capture_output=True)
@@ -383,6 +420,13 @@ def main() -> int:
     ap.add_argument("--batch-size", type=int, default=32,
                     help="points per REST upsert call (writer efficiency "
                          "only, does not change what is measured)")
+    ap.add_argument("--capture-telemetry", action="store_true",
+                    help="experiment/qdrant-optimizer-masking-index-recall "
+                         "(issue #8): poll each node's indexed_vectors_count/"
+                         "segments_count/status at --sample-interval "
+                         "cadence, written to results/telemetry.csv. Off by "
+                         "default -- does not affect samples.csv or any "
+                         "other branch's behavior.")
     args = ap.parse_args()
 
     if args.chaos_duration is not None and args.no_chaos:
@@ -454,6 +498,16 @@ def _run_experiment_body(args, writer, queries, node_ids) -> int:
                           args=(stop_evt, node_ids, violations, checks_run), daemon=True)
     vt.start()
     threads.append(vt)
+
+    telemetry_rows: list[dict] = []
+    telemetry_errors: list[str] = []
+    if args.capture_telemetry:
+        tt = threading.Thread(
+            target=telemetry_loop,
+            args=(stop_evt, node_ids, args.sample_interval, telemetry_rows, telemetry_errors),
+            daemon=True)
+        tt.start()
+        threads.append(tt)
 
     chaos_start_rel = None
     chaos_stop_rel = None
@@ -545,6 +599,17 @@ def _run_experiment_body(args, writer, queries, node_ids) -> int:
         json.dump([{**e, "t_rel": round(e["t"] - t_start, 3)} for e in chaos_events],
                   f, indent=2)
 
+    if args.capture_telemetry:
+        with open(os.path.join(RESULTS_DIR, "telemetry.csv"), "w", newline="") as f:
+            w = csv.DictWriter(f, fieldnames=["t_rel", "node", "indexed_vectors_count",
+                                              "points_count", "segments_count",
+                                              "status", "optimizer_status"])
+            w.writeheader()
+            for r in telemetry_rows:
+                r = dict(r)
+                r["t_rel"] = round(r.pop("t") - t_start, 3)
+                w.writerow(r)
+
     meta = {
         "system": "qdrant",
         "qdrant_image": topo.QDRANT_IMAGE,
@@ -577,6 +642,9 @@ def _run_experiment_body(args, writer, queries, node_ids) -> int:
         "sampler_errors": sampler_errors[:20],
         "raft_checks_run": checks_run[0],
         "raft_violations": [repr(v) for v in violations],
+        "telemetry_captured": args.capture_telemetry,
+        "telemetry_rows": len(telemetry_rows) if args.capture_telemetry else None,
+        "telemetry_errors": telemetry_errors[:20] if args.capture_telemetry else None,
     }
     with open(os.path.join(RESULTS_DIR, "run_meta.json"), "w") as f:
         json.dump(meta, f, indent=2)
