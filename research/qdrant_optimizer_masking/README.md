@@ -42,7 +42,10 @@ python research/qdrant_optimizer_masking/analyze_indexing_lag.py \
 
 `results/*_instrumented_seed20260920.*` are exactly the output of the
 first command (copied out before the next run overwrites
-`research/cross_system_replication/results/`).
+`research/cross_system_replication/results/`). `results/*_seed20260921.*`
+is a second run, same command with `--seed 20260921`, added per PR #11's
+review to meet SPEC.md's "at least 2 fresh runs" minimum -- see SPEC.md's
+second addendum for both runs' numbers side by side.
 
 ## Analysis
 

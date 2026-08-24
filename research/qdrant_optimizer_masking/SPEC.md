@@ -79,4 +79,19 @@ This is closest to **Expected outcome (c)**, but for a different reason than out
 
 Given that this materially qualifies a claim in a **merged** PR, this branch should not sit unreviewed — recommend flagging on PR #6 immediately (done, see PR comment) rather than waiting for this branch's own PR to close the loop.
 
-*(Not yet — DRAFT until results exist. See `GIT_WORKFLOW.md`'s merge criteria before deciding.)*
+## Addendum: 2026-08-24 — second seed, per the reviewer's item 1
+
+Per the PR #11 review's item 1 (the spec's own "at least 2 fresh runs" minimum wasn't met by the first instrumented run), ran a second instrumented run, same scale/protocol, different seed (`--seed 20260921`, otherwise identical to seed 20260920's command).
+
+**The pattern replicates, and is even starker.** Chaos ran t=50.1-116.9s. The first telemetry sample showing any node with `indexed_vectors_count > 0` was **t=158.4s** — after the run's own nominal 150s duration, meaning **the entire baseline period and the entire chaos window ran with zero indexed vectors on every node**. Of 74 scorable `index_recall` samples, 62 (84%) were taken with every node fully unindexed, averaging `index_recall = 0.9924`; the 12 samples taken once indexing had begun averaged `0.9912` — again statistically indistinguishable, and in fact very slightly *lower* for the partially-indexed group, the opposite direction a "graph gets better once merges catch up" story would predict (though 12 samples is too few to read anything into that direction on its own).
+
+| | seed 20260920 | seed 20260921 |
+|---|---|---|
+| first any-node-indexed telemetry sample | t=83.1s | t=158.4s |
+| unindexed-bucket `index_recall` (n, mean) | 32, 0.9951 | 62, 0.9924 |
+| partially-indexed-bucket `index_recall` (n, mean) | 21, 0.9958 | 12, 0.9912 |
+| chaos window | t=50.3-131.9s | t=50.1-116.9s |
+
+Both seeds show the same qualitative pattern (indexing lags the write rate by well over a minute at this scale; `index_recall` doesn't distinguish indexed from unindexed samples), and the second seed's chaos window fell entirely within the unindexed period — an even cleaner case that the PR #6 sweep's `index_recall` comparison for this seed's-worth of behavior could not have measured graph-quality divergence at all, because there was no graph.
+
+**Decision, updated:** item 1 (re-run across at least one more seed) is done. The finding is no longer single-run-only, and the second run's stricter version (chaos entirely unindexed, not just partially) strengthens rather than weakens the original read. Items 2-4 from the Decision section above are unchanged and still open — in particular, item 2 (the actual correction text for PR #6's SPEC.md/README) is still deliberately not written here; this addendum reports the second run's evidence, it does not decide what to do with it. That's for review.

@@ -1,0 +1,26 @@
+[
+  {
+    "t": 1787549172.0063267,
+    "target": "rrd-qdrant-node2",
+    "alive_after_restart": true,
+    "down_for_s": 3.527600529528197,
+    "restart_count": 0,
+    "t_rel": 55.956
+  },
+  {
+    "t": 1787549189.9548845,
+    "target": "rrd-qdrant-node1",
+    "alive_after_restart": true,
+    "down_for_s": 1.2773965033502686,
+    "restart_count": 0,
+    "t_rel": 73.904
+  },
+  {
+    "t": 1787549204.0205748,
+    "target": "rrd-qdrant-node1",
+    "alive_after_restart": true,
+    "down_for_s": 7.2308793960949345,
+    "restart_count": 0,
+    "t_rel": 87.97
+  }
+]
