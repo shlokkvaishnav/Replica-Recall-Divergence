@@ -126,6 +126,15 @@ documentation, interpretation, research integrity, integration, evidence.
 Comments, doesn't push code, doesn't merge.
 
 **Process:**
+0. Count the review rounds already on this PR (its comment history is the
+   record; don't rely on remembering them). At **three**, do not open a
+   fourth: post the findings, leave the PR `stage:changes-requested`, and say
+   explicitly that the round cap was reached and a human should look. Do
+   **not** approve at the cap — see "Bounding the review/revision cycle" for
+   why that direction is the wrong one. Rounds that each find a real,
+   independently-verifiable defect are the cycle working, not looping; a
+   round that only verifies a previous round's fix and reaches a decision is
+   not a findings round and does not count against the cap.
 1. Read the issue, the PR template's filled-in answers, and the diff, as if
    seeing them for the first time — see "Guarding role separation," below,
    for why that matters more now than it did with three sessions.
@@ -160,7 +169,7 @@ is true. A single loop iteration **chains**: the moment a role's one unit of
 work finishes (a PR reviewed, an issue implemented, an issue filed),
 immediately re-run this same query list from the top and play whatever
 fires next — do not wait for the next scheduled wakeup. Only stop once
-condition 4 (idle) is reached. This priority order clears the pipeline
+condition 5 (idle) is reached. This priority order clears the pipeline
 downstream-first, so work already in flight finishes before new work
 starts:
 
@@ -189,15 +198,15 @@ what's in them.
 
 **Bounding the review/revision cycle.** Queries 1 and 2 hand a PR back and
 forth between the same session's two roles, so nothing in the loop itself
-stops that pair from cycling. Cap it: after **three** review rounds on one
-PR, the Reviewer does not open a fourth. It posts its findings, leaves the
-PR `stage:changes-requested`, and says explicitly that the round cap was
-reached and a human should look. The cap is deliberately *not* "approve it
-and move on" — the failure mode it guards against is two roles converging
-on each other, and auto-approving at the cap would resolve that in the one
-direction the whole pipeline exists to prevent. Rounds that each find a
-real, independently-verifiable defect are the cycle working, not looping;
-what the cap catches is the case where they stop doing that.
+stops that pair from cycling. The cap that bounds it is **step 0 of the
+Reviewer's instructions**, not a rule of role selection — role selection
+only picks which numbered list to execute, it does not add to what is in
+them, and a rule filed outside the list of the role that must obey it is a
+rule that does not run. The rationale lives here, where the risk it guards
+is explained: the failure mode is two roles converging on each other, so
+the cap escalates to a human rather than approving — auto-approving at the
+cap would resolve that convergence in the one direction the manual-merge
+gate exists to prevent, which is worse than a PR waiting.
 
 **Chaining stops being safe to auto-continue past a MERGE-decided PR.**
 Reviewer step 5 labels a MERGE-approved PR `stage:approved-pending-merge`,
