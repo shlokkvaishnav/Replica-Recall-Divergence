@@ -233,6 +233,30 @@ class RetainingWriter:
 # against qdrant_probe.ReplicaProbe instead of probe.ReplicaProbe.
 # ---------------------------------------------------------------------------
 
+def _chaos_thread(dh_mod, args, stop_evt, containers, events, window_s):
+    """Pick the randomized or the controlled chaos loop (issue #17).
+
+    Default (`--kill-schedule` omitted) returns exactly the thread this code
+    built before the flag existed -- no already-merged result shifts because a
+    new option appeared, the same discipline `--loo-query-mode pinned` follows.
+    The schedule is built and validated up front so an infeasible request fails
+    before the cluster is under load, not partway through a run.
+    """
+    if not args.kill_schedule:
+        return threading.Thread(target=dh_mod.chaos_loop,
+                                args=(stop_evt, containers, events), daemon=True)
+
+    schedule = dh_mod.build_kill_schedule(
+        args.kill_schedule, list(containers.keys()), args.kill_count,
+        window_s, target_node=args.kill_target_node)
+    print(f"[qrr] kill schedule '{args.kill_schedule}': "
+          + ", ".join(f"t+{s['at_s']:.1f}s {s['target']}" for s in schedule))
+    return threading.Thread(
+        target=dh_mod.chaos_loop_scheduled,
+        args=(stop_evt, containers, events, schedule, args.kill_schedule),
+        daemon=True)
+
+
 def sample_once(probes, writer: RetainingWriter, queries: np.ndarray,
                 k: int, settle_s: float, metric: str) -> list[dict]:
     t = time.time()
@@ -416,6 +440,18 @@ def main() -> int:
     ap.add_argument("--seed", type=int, default=20260808)
     ap.add_argument("--no-chaos", action="store_true")
     ap.add_argument("--chaos-duration", type=int, default=None)
+    ap.add_argument("--kill-schedule", default=None,
+                    choices=list(dh.KILL_CONDITIONS),
+                    help="issue #17: replace the randomized chaos loop with a "
+                         "controlled kill schedule, making inter-kill spacing "
+                         "and targeting independent variables. Omit for the "
+                         "existing randomized behaviour (default, unchanged).")
+    ap.add_argument("--kill-count", type=int, default=3,
+                    help="--kill-schedule only: kills per run, held constant "
+                         "across conditions.")
+    ap.add_argument("--kill-target-node", default=None,
+                    help="--kill-schedule only: which node the same-node "
+                         "conditions repeatedly kill (default: node 0).")
     ap.add_argument("--pre-chaos-s", type=float, default=30.0)
     ap.add_argument("--batch-size", type=int, default=32,
                     help="points per REST upsert call (writer efficiency "
@@ -429,6 +465,10 @@ def main() -> int:
                          "other branch's behavior.")
     args = ap.parse_args()
 
+    if args.kill_schedule and args.no_chaos:
+        print("ERROR: --kill-schedule and --no-chaos are contradictory.",
+              file=sys.stderr)
+        return 2
     if args.chaos_duration is not None and args.no_chaos:
         print("ERROR: --chaos-duration and --no-chaos are contradictory.", file=sys.stderr)
         return 1
@@ -519,8 +559,8 @@ def _run_experiment_body(args, writer, queries, node_ids) -> int:
             time.sleep(args.duration)
 
         elif args.chaos_duration is None:
-            ct = threading.Thread(target=dh.chaos_loop,
-                                  args=(stop_evt, containers, chaos_events), daemon=True)
+            ct = _chaos_thread(dh, args, stop_evt, containers, chaos_events,
+                               args.duration)
             ct.start()
             threads.append(ct)
             chaos_start_rel = time.time() - t_start
@@ -542,8 +582,8 @@ def _run_experiment_body(args, writer, queries, node_ids) -> int:
             print(f"[qrr] phase 1/3: {pre:.0f}s settling, no faults...")
             time.sleep(pre)
 
-            ct = threading.Thread(target=dh.chaos_loop,
-                                  args=(chaos_stop_evt, containers, chaos_events), daemon=True)
+            ct = _chaos_thread(dh, args, chaos_stop_evt, containers,
+                               chaos_events, args.chaos_duration)
             ct.start()
             threads.append(ct)
             chaos_start_rel = time.time() - t_start
