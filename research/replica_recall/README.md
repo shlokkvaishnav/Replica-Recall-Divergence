@@ -87,6 +87,15 @@ are held against a replica.
 
 **The query set is pinned and seeded.** Identical at every sample and across
 runs, so recall differences are attributable to the cluster, not the queries.
+This is a deliberate control, and it was checked rather than assumed: at the
+scale tested, pinning does not appear to be load-bearing for `loo_agreement`'s
+detection accuracy (three 5-seed conditions — pinned, non-pinned/100 queries,
+non-pinned/15 — mean hit rates 0.87 / 0.86 / 0.81 against a 1/3 chance line,
+no pairwise difference detectable at n=5). Q4's result below therefore does not
+appear to hinge on the pinned workload, though n=5 is a weak instrument for
+saying so. `run_experiment.py`'s
+`--loo-query-mode nonpinned` runs the alternative; see
+[`../loo_agreement_nonpinned_queries/SPEC.md`](../loo_agreement_nonpinned_queries/SPEC.md).
 
 **Unreachable is recorded, not raised.** The chaos loop is killing these
 processes. An unreachable replica is a data point — and notably the *honest*
