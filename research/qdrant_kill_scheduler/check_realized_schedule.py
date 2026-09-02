@@ -32,10 +32,6 @@ import os
 # conditions could be confused for each other.
 DRIFT_TOLERANCE_S = 2.0
 
-# chaos_loop_scheduled's fixed down-time, mirrored here so realized restart
-# latency can be derived from an events.json alone.
-FIXED_DOWN_S = 4.5
-
 
 def check_run(run_dir):
     events = json.load(open(os.path.join(run_dir, "events.json")))
@@ -58,6 +54,7 @@ def check_run(run_dir):
             "at_drift": at_drift,
             "req_gap": e["requested_gap_s"], "real_gap": e["realized_gap_s"],
             "gap_drift": gap_drift,
+            "down_for": e.get("down_for_s"),
             "killed_while_down": e.get("killed_while_down"),
             "alive_after_restart": e.get("alive_after_restart"),
         })
@@ -116,14 +113,21 @@ def main():
         # actually restarted the container, so the node comes back LATER than
         # kill+down_for implies, and that lateness is subtracted from the gap.
         # Reported because #9 needs the number, not just the fact.
+        #
+        # down_for is read from each event rather than from a constant mirrored
+        # off the harness. A mirrored constant would keep computing against a
+        # stale value if the harness's changed -- no error, just a quietly wrong
+        # latency, which is the exact failure class this tool exists to catch.
         lat = []
         by_seq = {w["seq"]: w for w in r["rows"]}
         for w in r["rows"]:
             prev = by_seq.get(w["seq"] - 1)
             if prev is None or w["real_gap"] is None:
                 continue
+            if prev["down_for"] is None:
+                continue
             restart_at = w["real_at"] - w["real_gap"]
-            lat.append(restart_at - (prev["real_at"] + FIXED_DOWN_S))
+            lat.append(restart_at - (prev["real_at"] + prev["down_for"]))
         if lat:
             print(f"  implied restart latency (docker start -> node back): "
                   f"{min(lat):+.2f} to {max(lat):+.2f}s  "

@@ -256,3 +256,43 @@ Deliberately *not* done: compensating for the latency by padding requested gaps.
 It varies 3.08-3.58s, so padding would leave residual error while making runs
 look exact - trading a visible, recorded bias for a hidden one. Recording beats
 correcting here.
+
+## Addendum: review round 1 (2026-09-02)
+
+The reviewer recomputed every figure in the validation addendum from
+`results/*/events.json` directly, without using this branch's own checker; all
+reproduced exactly (drift mean -3.24s / worst -3.76s, realized gaps 1.529 and
+2.173 / 37.10 and 36.24, latency +3.08 to +3.58s, targeting 1/1/3). Two defects
+found, both accepted and fixed:
+
+1. **`check_realized_schedule.py` mirrored `FIXED_DOWN_S = 4.5` off the
+   harness.** Change the harness constant and the checker would keep computing
+   latency against 4.5 -- no error, just a quietly wrong number. Fixed by
+   deleting the constant and reading each event's own recorded `down_for_s`,
+   which every event already carried. The derivation is now self-describing from
+   the artifact and stays correct for runs made under any future down-time.
+   Recomputed output after the change is identical, as it must be.
+2. **`build_kill_schedule` did not validate `--kill-target-node`.** A typo'd
+   name built a plausible schedule, printed it, and then died on
+   `containers[name]` at the first kill -- after the cluster was up, the corpus
+   written and the pre-chaos window spent. It now raises at build time, naming
+   the valid nodes, which is the rule the function already applied to infeasible
+   windows and wrong kill counts. Three checks added (27 total).
+
+Both defects were the same shape: a value that could silently disagree with
+reality, in a tool built to catch values that silently disagree with reality.
+The mirrored constant is the sharper of the two, since it would have degraded a
+*measurement* rather than crashed a run.
+
+Two things the reviewer recorded as non-defects, kept here because they bound
+what #9 can use this for:
+
+- **`spread`'s spacing is validated through offsets, not gaps.**
+  `realized_gap_s` is per-node and therefore `None` for every `spread` kill by
+  construction, so the n=4 drift statistic comes entirely from the two same-node
+  conditions. Spread's cadence is confirmed (offsets tracked to +0.15s), but no
+  per-node gap figure for `spread` exists or can be back-derived from these runs.
+- **The latency figure is one host, one Docker daemon, one image, three runs.**
+  #9 does not need it to be universal, since it defines conditions on realized
+  spacing recorded per run -- but nothing should later cite ~3.3s as a property
+  of Qdrant.
