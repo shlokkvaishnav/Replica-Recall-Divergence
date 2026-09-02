@@ -2,7 +2,7 @@
 
 **Branch:** `analysis/readme-layer3-pinning-caveat`
 **Date opened:** 2026-09-02
-**Status:** DRAFT — no analysis or edit yet. This file is committed before either exists.
+**Status:** COMPLETE — outcome (a) with a piece of (b). See Results, below.
 
 Issue: closes #10. Body copied verbatim below (per `research/AGENT_PIPELINE.md`'s implementer
 instructions — this is the issue text unmodified, not a paraphrase).
@@ -53,3 +53,71 @@ The merged PR #7 SPEC.md and its `compare_conditions.py` output are the ground t
 
 Scope creep risk: this task should touch only the wording directly related to the query-pinning-robustness finding, not become an opportunity to rewrite other parts of the README's findings section — that would violate the isolation spirit of `GIT_WORKFLOW.md` even though this is a docs-only change with no branch/experiment involved. Overclaiming risk in the other direction: the new wording must not imply `loo_agreement` robustness has been shown to generalize beyond the tested scale (SIFT1M, this topology, the specific query counts tested) — the existing project discipline (README's DO NOT CLAIM section) is exactly what this task needs to extend consistently, not undercut by overstating a now-more-favorable result.
 
+
+---
+
+## Results
+
+The evidence this doc change had to match, read off PR #7's merged
+`research/loo_agreement_nonpinned_queries/SPEC.md` (its two addenda) and
+`results/aggregate_{pinned,nonpinned,nonpinned_small}.txt`:
+
+| metric | pinned | nonpinned (100 q) | nonpinned_small (15 q) |
+|---|---|---|---|
+| detection hit rate | 0.870 ± 0.143 | 0.860 ± 0.143 | 0.811 ± 0.096 |
+| rank correlation | 0.918 ± 0.087 | 0.826 ± 0.120 | 0.827 ± 0.127 |
+| true-recall margin | 0.071 ± 0.020 | 0.057 ± 0.019 | 0.088 ± 0.038 |
+
+Nine pairwise between-condition Mann-Whitney tests (3 conditions × 3 metrics),
+none significant, p = 0.15–0.90. Chance baseline 1/3.
+
+Three things in the existing text were checked against that:
+
+1. **Open research question #5** ("does `loo_agreement` still work against
+   non-pinned, realistic query traffic?") — answered for the tested axis, and
+   still open for a different one. Rewritten, not deleted.
+2. **The HYPOTHESIS box** — said nothing about query workload either way, so it
+   was not *wrong*; it was silent about a robustness objection that has since
+   been tested. Result added there rather than to ESTABLISHED (see below).
+3. **The DO NOT CLAIM box** — contained no line that implied detection was only
+   shown under a pinned workload, so nothing needed walking back. It did need a
+   line added in the *other* direction, because removing #5 from the open list
+   makes general workload robustness the default reading if nothing says
+   otherwise.
+
+Also checked and deliberately not changed: the "Current results" section's
+statement that raw per-seed results are not committed. PR #7's sweep outputs
+*are* committed, but that sentence is scoped to the Layer 1 chaos numbers
+behind the ESTABLISHED box, which still are not — it remains literally true.
+
+## Interpretation
+
+Closest to **expected outcome (a)** — a small, localized edit — with one piece
+of **(b)**: the ESTABLISHED/HYPOTHESIS/OPEN structure has no natural slot for
+"a robustness objection to an unconfirmed hypothesis was tested and did not
+hold." Promoting it to ESTABLISHED would be wrong (what is established is a
+null between conditions, not the detector's claim); leaving it only in OPEN
+would be wrong (it is not unresolved). It went into the HYPOTHESIS box as an
+explicit "one objection tested, does not hold; this does not promote the
+claim," which is the smallest change that keeps the box honest. No new
+subsection was invented for it — a fourth category for one result would cost
+more legibility than it buys, but the tension is real and is recorded here in
+case a second such result ever arrives.
+
+Scope was held to the query-pinning finding, per the issue's own confound note.
+Two adjacent staleness items were found and deliberately **not** fixed here:
+
+- `research/README.md`'s experiment index still lists cross-system replication
+  as "**Not started** — spec committed, no implementation or results yet,"
+  which PR #6 superseded. Belongs in its own change.
+- Issue #9 (`stage:claimed`) has no branch and no PR.
+
+Both are noted in the PR description as follow-ons rather than folded in.
+
+## Decision
+
+**MERGE** (self-assessed; the reviewer role decides independently). Docs-only,
+no experimental claim added that PR #7's committed data does not support, every
+new number traceable to that branch's addenda, and the scope caveats carried
+forward unchanged rather than loosened. `DECISION_LOG.md` records the call per
+its own stated policy.
