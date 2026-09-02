@@ -121,3 +121,37 @@ no experimental claim added that PR #7's committed data does not support, every
 new number traceable to that branch's addenda, and the scope caveats carried
 forward unchanged rather than loosened. `DECISION_LOG.md` records the call per
 its own stated policy.
+
+## Addendum: review round 1 (2026-09-02)
+
+The reviewer role checked the new wording against
+`../loo_agreement_nonpinned_queries/results/compare_conditions_output.txt`
+directly rather than against PR #7's addenda, and returned **REVISE** on three
+overstatements. All three are fixed in the follow-up commit:
+
+1. "all landed in the same 0.81-0.87 hit-rate band" described the three
+   *condition means* (0.870 / 0.860 / 0.811) in language that reads as every
+   run. The 15 per-seed hit rates actually span 0.652-1.000; 11 of 15 fall
+   outside the quoted band. Now states the means as means, and cites the
+   per-seed interleaving -- which is the more persuasive fact, and the one PR
+   #7's own addendum leans on.
+2. "the pinning and query-count axes are now closed" -- two query counts (100,
+   15) are two data points, not a closed axis, and PR #7 says as much itself.
+   Now "tested at 100 and 15 queries per round," with the axis explicitly not
+   claimed as closed.
+3. "both left detection accuracy unchanged" read a null as an equivalence. At
+   5v5 the exact Mann-Whitney's floor is p=0.0079 and `DECISION_LOG.md` already
+   records that this is a deliberately weak instrument, so the supportable claim
+   is *no detectable difference at that power*, not *unchanged*. Fixed, and the
+   same error in milder form ("removes a confound") was softened to "weakens
+   that confound rather than eliminating it."
+
+Worth recording as a finding about the process rather than about the text: all
+three defects were in the direction of making the project's own result sound
+cleaner, on a change whose entire purpose was to keep the claim surface honest.
+The pull toward tidiness does not switch off just because the task is
+anti-overclaiming.
+
+The reviewer also flagged a gap in `AGENT_PIPELINE.md` -- its role-selection
+queries have no condition matching a `stage:changes-requested` PR, so requested
+revisions are invisible to the loop. Filed separately; not fixed here.
