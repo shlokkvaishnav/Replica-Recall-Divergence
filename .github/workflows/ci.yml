@@ -7,6 +7,20 @@ on:
     branches: [main]
 
 jobs:
+  research-index:
+    # Fast, no build: a docs-only PR should not wait on a C++ toolchain to be
+    # told its new research directory is missing from the experiment index.
+    # See issue #22 -- the index drifted three times in one session and was
+    # corrected by hand each time, which lasts until the next merge.
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: research/README.md index matches the tree
+        run: python3 research/check_index.py
+
   build-and-test:
     runs-on: ubuntu-latest
     timeout-minutes: 10

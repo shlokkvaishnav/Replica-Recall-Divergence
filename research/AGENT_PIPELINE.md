@@ -105,6 +105,13 @@ experiment. Update `SPEC.md`'s Results/Interpretation/Decision sections once
 there's something to put there — the issue and `SPEC.md` are the same
 content at every stage, not just at the start.
 
+**If the branch adds a `research/<name>/` directory,** add its row to
+`research/README.md`'s experiment index in the same PR — investigation,
+location, type, status. `research/check_index.py` enforces this in CI and runs
+in seconds locally. It checks only that the directory is *named*: whether the
+row's status is still true is a reviewer's job, since a row reading "Not
+started" for finished work passes the check and was a real defect (#15).
+
 **Opening the PR:** `.github/PULL_REQUEST_TEMPLATE.md` auto-populates — fill
 in every section honestly, including a self-assessed
 MERGE/ARCHIVE/REVISE/ABANDON/REPRODUCE decision. Label the PR

@@ -30,6 +30,10 @@ Closes #<issue number>
 
 (Yes/no, and what's missing if not.)
 
+## If this adds a `research/<name>/` directory, is it in the experiment index?
+
+(`research/README.md`'s table. CI enforces that the directory is *named*; it cannot check that the row's description is true, which is the part a reviewer has to read. A row saying "Not started" for finished work passes CI.)
+
 ## Did the implementation introduce any unintended changes elsewhere?
 
 (Check: existing metrics, datasets, seeds, baseline configurations, other branches' conclusions — see `research/GIT_WORKFLOW.md`'s isolation rule.)
