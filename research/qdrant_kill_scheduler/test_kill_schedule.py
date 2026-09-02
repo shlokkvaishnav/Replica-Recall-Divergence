@@ -111,6 +111,17 @@ check("infeasible window does NOT shorten the gap (the independent variable)",
              "do not shorten the gap"))
 check("spread with more kills than nodes raises",
       raises(lambda: dh.build_kill_schedule("spread", NODES, 5, 300.0), "distinct node"))
+check("a target node not in the cluster raises at build time, not at run time",
+      raises(lambda: dh.build_kill_schedule("short-gap-same-node", NODES, 3,
+                                            300.0, target_node="rrd-qdrant-nodeX"),
+             "not one of this cluster"))
+check("the error names the valid nodes",
+      raises(lambda: dh.build_kill_schedule("short-gap-same-node", NODES, 3,
+                                            300.0, target_node="typo"),
+             NODES[0]))
+check("a valid explicit target node is accepted",
+      dh.build_kill_schedule("short-gap-same-node", NODES, 3, 300.0,
+                             target_node=NODES[2])[0]["target"] == NODES[2])
 check("unknown condition raises", raises(
     lambda: dh.build_kill_schedule("no-such-condition", NODES, 3, 300.0), "unknown condition"))
 check("n_kills < 2 raises", raises(

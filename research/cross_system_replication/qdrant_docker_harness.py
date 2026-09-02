@@ -167,7 +167,16 @@ def build_kill_schedule(condition: str, node_names: list, n_kills: int,
         targets = list(node_names[:n_kills])
     else:
         gap = SHORT_GAP_S if condition == "short-gap-same-node" else LONG_GAP_S
-        targets = [target_node or node_names[0]] * n_kills
+        chosen = target_node or node_names[0]
+        if chosen not in node_names:
+            # Same reason the window check raises here rather than at run time:
+            # a typo'd node name would otherwise build a plausible-looking
+            # schedule, print it, and only fail on containers[name] after the
+            # cluster is up, the corpus written and the pre-chaos window spent.
+            raise ValueError(
+                f"--kill-target-node {chosen!r} is not one of this cluster's "
+                f"nodes: {node_names}")
+        targets = [chosen] * n_kills
 
     schedule, at = [], 0.0
     for i in range(n_kills):
