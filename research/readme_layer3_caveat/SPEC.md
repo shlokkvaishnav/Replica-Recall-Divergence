@@ -155,3 +155,19 @@ anti-overclaiming.
 The reviewer also flagged a gap in `AGENT_PIPELINE.md` -- its role-selection
 queries have no condition matching a `stage:changes-requested` PR, so requested
 revisions are invisible to the loop. Filed separately; not fixed here.
+
+## Addendum: review round 2 (2026-09-02)
+
+Round 1's fix introduced a fourth instance of round 1's own error, caught on
+re-review: "per-seed values (0.65-1.00 within every condition)" attributed a
+*pooled* range to each condition. Per-condition ranges are pinned 0.692-1.000,
+nonpinned 0.684-1.000, nonpinned_small 0.652-0.893 -- the third never reaches
+1.00. Fixed to "spanning 0.65-1.00 across the three conditions." "Interleaving
+almost completely" was softened to "overlapping heavily" in the same pass, since
+`nonpinned_small`'s five values all sit below the other two conditions' 1.000s.
+
+That the fix for an overstatement introduced a smaller overstatement of the same
+kind is worth more than the correction itself: the pull is not a one-time
+mistake to be corrected, it is a standing bias in how summary statistics get
+written up, and the only thing that caught it either time was re-reading the raw
+per-seed table instead of the prose describing it.
