@@ -1,6 +1,6 @@
 [
   {
-    "t": 1788353722.8115473,
+    "t": 1788350880.9810975,
     "target": "rrd-qdrant-node0",
     "alive_after_restart": true,
     "down_for_s": 4.5,
@@ -8,14 +8,14 @@
     "condition": "spread",
     "seq": 0,
     "requested_at_s": 0.0,
-    "realized_at_s": 0.128,
+    "realized_at_s": 0.127,
     "requested_gap_s": null,
     "realized_gap_s": null,
     "killed_while_down": false,
-    "t_rel": 40.137
+    "t_rel": 40.14
   },
   {
-    "t": 1788353767.7797647,
+    "t": 1788350925.5304573,
     "target": "rrd-qdrant-node1",
     "alive_after_restart": true,
     "down_for_s": 4.5,
@@ -23,14 +23,14 @@
     "condition": "spread",
     "seq": 1,
     "requested_at_s": 44.5,
-    "realized_at_s": 45.096,
+    "realized_at_s": 44.676,
     "requested_gap_s": 40.0,
     "realized_gap_s": null,
     "killed_while_down": false,
-    "t_rel": 85.105
+    "t_rel": 84.689
   },
   {
-    "t": 1788353811.9695017,
+    "t": 1788350969.9951591,
     "target": "rrd-qdrant-node2",
     "alive_after_restart": true,
     "down_for_s": 4.5,
@@ -38,10 +38,10 @@
     "condition": "spread",
     "seq": 2,
     "requested_at_s": 89.0,
-    "realized_at_s": 89.286,
+    "realized_at_s": 89.141,
     "requested_gap_s": 40.0,
     "realized_gap_s": null,
     "killed_while_down": false,
-    "t_rel": 129.295
+    "t_rel": 129.154
   }
 ]

@@ -1,0 +1,47 @@
+[
+  {
+    "t": 1788351119.121696,
+    "target": "rrd-qdrant-node0",
+    "alive_after_restart": true,
+    "down_for_s": 4.5,
+    "restart_count": 0,
+    "condition": "short-gap-same-node",
+    "seq": 0,
+    "requested_at_s": 0.0,
+    "realized_at_s": 0.295,
+    "requested_gap_s": null,
+    "realized_gap_s": null,
+    "killed_while_down": false,
+    "t_rel": 40.31
+  },
+  {
+    "t": 1788351128.5058677,
+    "target": "rrd-qdrant-node0",
+    "alive_after_restart": true,
+    "down_for_s": 4.5,
+    "restart_count": 0,
+    "condition": "short-gap-same-node",
+    "seq": 1,
+    "requested_at_s": 9.5,
+    "realized_at_s": 9.68,
+    "requested_gap_s": 5.0,
+    "realized_gap_s": 0.34,
+    "killed_while_down": false,
+    "t_rel": 49.694
+  },
+  {
+    "t": 1788351137.94428,
+    "target": "rrd-qdrant-node0",
+    "alive_after_restart": true,
+    "down_for_s": 4.5,
+    "restart_count": 0,
+    "condition": "short-gap-same-node",
+    "seq": 2,
+    "requested_at_s": 19.0,
+    "realized_at_s": 19.118,
+    "requested_gap_s": 5.0,
+    "realized_gap_s": 0.502,
+    "killed_while_down": false,
+    "t_rel": 59.132
+  }
+]

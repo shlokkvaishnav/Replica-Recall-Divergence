@@ -211,6 +211,53 @@ def main():
             print(f"    {a:<22} {statistics.mean(va):>9.3f}  vs  "
                   f"{b:<20} {statistics.mean(vb):>9.3f}   U={u:<6.1f} p={p:.4f}{star}")
 
+    # ------------------------------------------------------- EXPLORATORY only
+    #
+    # Added AFTER the pre-registered analysis returned a degenerate metric, and
+    # therefore post-hoc. These are not this experiment's answer and must never
+    # be reported as one: SPEC.md pre-registered recovery across the quiesce
+    # window, and switching to a metric chosen after seeing the data is the
+    # failure pre-registration exists to prevent. They are computed here so the
+    # observation is reproducible, and so it can be pre-registered properly
+    # somewhere else.
+    #
+    # Two measures, because they can disagree:
+    #   peak       -- most damage coexisting at any one instant. Mechanically
+    #                 larger when kills overlap in time, so on its own it cannot
+    #                 separate "more damage" from "same damage, concentrated".
+    #   integrated -- missing-id-seconds over the run (trapezoid): total
+    #                 damage-time, which the concurrency artifact does not
+    #                 inflate.
+    print("\n" + "=" * 74)
+    print("EXPLORATORY (post-hoc, NOT the pre-registered metric -- see SPEC.md)")
+    print("=" * 74)
+    peaks, areas = {}, {}
+    for r in live:
+        rows = list(csv.DictReader(open(os.path.join(r["dir"], "samples.csv"))))
+        pts = sorted((float(x["t_rel"]),
+                      (1 - float(x["completeness"])) * float(x["n_intended"]))
+                     for x in rows if x["reachable"] == "1"
+                     and x["completeness"] and x["n_intended"])
+        if not pts:
+            continue
+        peaks.setdefault(r["condition"], []).append(max(v for _, v in pts))
+        areas.setdefault(r["condition"], []).append(
+            sum((pts[i][0] - pts[i - 1][0]) * (pts[i][1] + pts[i - 1][1]) / 2
+                for i in range(1, len(pts))))
+    for label, data in (("peak missing (one instant)", peaks),
+                        ("integrated missing-seconds (total damage-time)", areas)):
+        print(f"\n  {label}")
+        for c in CONDITIONS:
+            v = sorted(data.get(c, []))
+            if v:
+                print(f"    {c:<22} n={len(v)}  median={statistics.median(v):>10.0f}"
+                      f"  per-seed {[round(x) for x in v]}")
+        for a, b in pairs:
+            if len(data.get(a, [])) >= 2 and len(data.get(b, [])) >= 2:
+                u, p = mann_whitney(data[a], data[b])
+                print(f"    {a:<22} vs {b:<20} U={u:<6.1f} p={p:.4f}"
+                      f"{'*' if p < 0.05 else ''}")
+
     print("\n" + "=" * 74)
     print("Per-seed values, since means at n=5 hide how much they overlap")
     print("=" * 74)

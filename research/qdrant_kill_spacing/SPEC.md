@@ -2,10 +2,9 @@
 
 **Branch:** `experiment/qdrant-kill-spacing`
 **Date opened:** 2026-09-02
-**Status:** DRAFT - committed before any run of this experiment exists. No
-results, no analysis. The amendments below are written now, against evidence
-that already existed, precisely so they cannot be chosen after seeing an
-outcome.
+**Status:** COMPLETE - 15 runs done. The pre-registered comparison is VOID by
+Amendment 4, for a design error identified below. An exploratory observation is
+recorded and explicitly not promoted to an answer.
 
 Issue: closes #9. Body copied verbatim below (heading levels normalized).
 
@@ -170,3 +169,139 @@ Written before the runs so it cannot be rationalized afterwards:
   under study. Every occurrence is reported; if it is common in short-gap runs,
   the condition is measuring two things at once and the result is qualified
   accordingly rather than presented cleanly.
+
+---
+
+## Results
+
+All 15 runs completed. Raw data in `results/<condition>_seed<seed>/`, analysis
+output in `results/analysis_output.txt`.
+
+### Validity preconditions
+
+| precondition | outcome |
+|---|---|
+| corpus exhausted (Amendment 2) | **0 of 15** - the 200k corpus fix worked |
+| `killed_while_down` (Amendment 4) | **0 occurrences** |
+| realized short/long separation (Amendment 1) | **clean**: short 0.20-1.67s (median 0.70s), long 33.49-36.82s (median 34.89s) |
+
+Amendments 1 and 2 both did their job. Realized short gaps came in even shorter
+than PR #18's validation predicted (median 0.70s vs 1.5-2.2s there) - under this
+sweep's heavier write load `docker start` takes longer, and it eats almost the
+whole 5s request. The conditions stayed cleanly separated anyway, which is the
+property Amendment 1 exists to guarantee.
+
+### The pre-registered comparison is VOID
+
+| condition | n | damage at chaos-stop | residual | recovered | healed |
+|---|---|---|---|---|---|
+| short-gap-same-node | 5 | **0** | 0 | undefined | 0/5 |
+| long-gap-same-node | 5 | **0** | 0 | undefined | 0/5 |
+| spread | 5 | **0** | 0 | undefined | 0/5 |
+
+`recovered_frac` is `damage == 0 -> 0/0`, undefined in all 15 runs. This is
+**not** "all conditions healed perfectly" and must never be written that way:
+there was no damage present at the measurement point to recover from, so the
+metric has no value rather than a perfect one. Amendment 4's first bullet fires
+exactly as written, and the comparison it guards is void.
+
+### Why: a design error in Amendment 3, visible in the data
+
+Damage is real and large during chaos - peaks of 3,225-6,517 missing ids in the
+short-gap condition. It is simply **all gone before the measurement point**:
+
+| condition | last kill | chaos stop | quiet tail | peak missing | missing at stop |
+|---|---|---|---|---|---|
+| short-gap | ~60s | ~151s | **91s** | 3,225-6,517 | 0 |
+| long-gap | ~129s | ~151s | 21s | 746-1,693 | 0 |
+| spread | ~129s | ~151s | 21s | 175-1,386 | 0 |
+
+`heal_stats` measures damage at chaos-stop, which is correct for the randomized
+protocol it was written for - there, kills continue until the window closes. A
+*scheduled* run finishes its kills early and then sits idle inside its own chaos
+window, and Qdrant repairs everything in that gap.
+
+**Amendment 3 held the wrong invariant.** With kill count fixed, chaos-window
+duration and inter-kill spacing cannot both be held constant - the window is a
+function of the spacing. Holding the window constant hands the short-gap
+condition a 91-second free recovery period against the long-gap condition's 21,
+which is a confound acting directly on the comparison of interest, and worse
+than the unequal-window alternative it was chosen to avoid.
+
+That is a mistake in this spec, made before the runs and detected in the data
+rather than in review. It is stated here rather than in a follow-up, because
+this spec is what made the claim.
+
+## Interpretation
+
+**On the question #9 asked: no answer.** Whether kill spacing affects
+post-chaos healing is not addressed by this experiment. Qdrant, at this scale
+and fault model, fully recovered from every kill pattern within roughly 20
+seconds, so no condition carried damage into its quiesce window. That premise -
+that some kill patterns leave damage behind to heal from - did not hold here.
+
+The honest one-line summary is: **the ruler read zero for everything, so nothing
+was compared.**
+
+### Exploratory, and deliberately not the answer
+
+The pre-registered metric being degenerate, two post-hoc measures were computed.
+Both are labelled EXPLORATORY in `analyze_kill_spacing.py` for the same reason
+they are labelled here: SPEC.md pre-registered recovery across the quiesce
+window, and a metric chosen after seeing the data is precisely what
+pre-registration exists to stop. These do not answer #9.
+
+| measure | short-gap | long-gap | spread |
+|---|---|---|---|
+| peak missing, median | **4,807** | 1,310 | 1,139 |
+| integrated missing-seconds, median | **25,716** | 13,735 | 9,998 |
+
+| comparison | peak | integrated |
+|---|---|---|
+| short vs long | U=25.0 **p=0.0079** | U=24.0 **p=0.0159** |
+| short vs spread | U=25.0 **p=0.0079** | U=25.0 **p=0.0079** |
+| long vs spread | U=16.0 p=0.5476 | U=15.0 p=0.6905 |
+
+Two things worth noting about the shape of this, if it is ever tested properly:
+
+1. **Peak alone would not have been trustworthy.** Peak is the damage coexisting
+   at one instant, and compressed kills overlap in time, so a higher peak is
+   partly arithmetic. Integrated missing-seconds - total damage-time, which
+   concurrency does not inflate - was computed specifically to check that, and
+   it separates in the same direction. The effect is not only concentration.
+2. **Long-gap and spread are indistinguishable from each other** on both
+   measures (p=0.55, p=0.69), while both differ from short-gap. If that holds
+   up, what matters is not whether the same node is hit twice, but whether it
+   is hit again *before it has recovered* - which is the mechanism #9
+   hypothesised, arrived at from the side.
+
+Caveats that would need handling in a real test: the short-gap integrated values
+include one extreme run (136,289 against a 25,716 median), so the mean is
+misleading and the median is the honest summary; n=5 with three pairwise
+comparisons sits at the exact test floor; and none of this was pre-registered.
+
+## Decision
+
+**ARCHIVE the result, MERGE the branch.** Per `GIT_WORKFLOW.md`: a branch that
+produces a negative or void result is not a failed branch, and merges when the
+implementation itself is validated infrastructure.
+
+- The pre-registered question is unanswered, and the branch says so plainly
+  rather than reporting a perfect-healing result that would have been false.
+- `analyze_kill_spacing.py` is validated infrastructure: it reuses `heal_stats`
+  and `mann_whitney` rather than reimplementing them, enforces the spec's
+  validity preconditions before comparing anything, and names void runs instead
+  of dropping them. It caught this experiment's own degeneracy.
+- The 15 runs are committed and are a usable baseline for the corrected design.
+- The design error is recorded where it happened.
+
+**What should happen next**, as a separate pre-registered experiment, not an
+amendment here:
+
+1. Measure damage at **last-kill + settle**, not at chaos-stop, removing the
+   quiet tail analytically without changing the protocol.
+2. Or end the chaos window at the last kill, accepting unequal window durations
+   as the lesser confound - and say which invariant is being held and why.
+3. Pre-register the damage measures (peak and integrated) properly, so this
+   session's exploratory observation can be confirmed or refuted rather than
+   cited.

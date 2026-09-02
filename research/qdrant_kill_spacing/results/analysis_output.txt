@@ -1,0 +1,86 @@
+==========================================================================
+Validity preconditions (SPEC.md Amendment 2 and 4)
+==========================================================================
+  runs found                    : 15
+  void (corpus exhausted)       : 0
+  killed_while_down occurrences : 0
+
+  realized gaps by condition (Amendment 1 -- realized, not requested):
+    short-gap-same-node    n= 10  0.20-1.67s  median 0.70s
+    long-gap-same-node     n= 10  33.49-36.82s  median 34.89s
+    spread                 n=  0  none by construction -- each node killed once
+    short/long overlap in realized terms: no -- cleanly separated
+
+==========================================================================
+Per-run healing (absolute missing ids, per DECISION_LOG's dilution trap)
+==========================================================================
+condition                   seed kills   damage  residual  recovered  healed  wfail%
+long-gap-same-node      20260940     3        0         0         --    None    1.92
+long-gap-same-node      20260941     3        0         0         --    None    2.38
+long-gap-same-node      20260942     3        0         0         --    None    1.98
+long-gap-same-node      20260943     3        0         0         --    None    1.40
+long-gap-same-node      20260944     3        0         0         --    None    1.63
+short-gap-same-node     20260940     3        0         0         --    None    2.49
+short-gap-same-node     20260941     3        0         0         --    None    1.73
+short-gap-same-node     20260942     3        0         0         --    None    1.25
+short-gap-same-node     20260943     3        0         0         --    None    1.70
+short-gap-same-node     20260944     3        0         0         --    None    2.76
+spread                  20260940     3        0         0         --    None    1.80
+spread                  20260941     3        0         0         --    None    1.68
+spread                  20260942     3        0         0         --    None    1.49
+spread                  20260943     3        0         0         --    None    1.69
+spread                  20260944     3        0         0         --    None    1.69
+
+==========================================================================
+By condition
+==========================================================================
+condition                n  recovered mean  residual mean   healed  wfail% mean
+short-gap-same-node      5              --              0      0/5         1.99
+long-gap-same-node       5              --              0      0/5         1.86
+spread                   5              --              0      0/5         1.67
+
+==========================================================================
+Between-condition comparisons (exact two-sided Mann-Whitney, 5v5 floor p=0.0079)
+==========================================================================
+
+  recovered fraction (higher is healthier)
+    short-gap-same-node vs long-gap-same-node: not enough scorable runs (0 vs 0)
+    short-gap-same-node vs spread: not enough scorable runs (0 vs 0)
+    long-gap-same-node vs spread: not enough scorable runs (0 vs 0)
+
+  residual missing (lower is healthier)
+    short-gap-same-node        0.000  vs  long-gap-same-node       0.000   U=12.5   p=1.0000 
+    short-gap-same-node        0.000  vs  spread                   0.000   U=12.5   p=1.0000 
+    long-gap-same-node         0.000  vs  spread                   0.000   U=12.5   p=1.0000 
+
+  write-failure rate (lower is healthier)
+    short-gap-same-node        0.020  vs  long-gap-same-node       0.019   U=14.0   p=0.8413 
+    short-gap-same-node        0.020  vs  spread                   0.017   U=18.0   p=0.3095 
+    long-gap-same-node         0.019  vs  spread                   0.017   U=16.0   p=0.5476 
+
+==========================================================================
+EXPLORATORY (post-hoc, NOT the pre-registered metric -- see SPEC.md)
+==========================================================================
+
+  peak missing (one instant)
+    short-gap-same-node    n=5  median=      4807  per-seed [3225, 4401, 4807, 4963, 6517]
+    long-gap-same-node     n=5  median=      1310  per-seed [746, 1044, 1310, 1376, 1693]
+    spread                 n=5  median=      1139  per-seed [175, 1023, 1139, 1240, 1386]
+    short-gap-same-node    vs long-gap-same-node   U=25.0   p=0.0079*
+    short-gap-same-node    vs spread               U=25.0   p=0.0079*
+    long-gap-same-node     vs spread               U=16.0   p=0.5476
+
+  integrated missing-seconds (total damage-time)
+    short-gap-same-node    n=5  median=     25716  per-seed [16646, 19545, 25716, 45343, 136289]
+    long-gap-same-node     n=5  median=     13735  per-seed [8550, 9012, 13735, 13887, 18230]
+    spread                 n=5  median=      9998  per-seed [912, 9492, 9998, 11246, 15852]
+    short-gap-same-node    vs long-gap-same-node   U=24.0   p=0.0159*
+    short-gap-same-node    vs spread               U=25.0   p=0.0079*
+    long-gap-same-node     vs spread               U=15.0   p=0.6905
+
+==========================================================================
+Per-seed values, since means at n=5 hide how much they overlap
+==========================================================================
+  short-gap-same-node    recovered [None, None, None, None, None]
+  long-gap-same-node     recovered [None, None, None, None, None]
+  spread                 recovered [None, None, None, None, None]
