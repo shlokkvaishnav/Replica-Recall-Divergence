@@ -166,23 +166,42 @@ starts:
 
 1. **`gh pr list --label stage:in-review`** returns anything → play
    **Reviewer** on the oldest PR.
-2. Else, **`gh issue list --label stage:proposed --assignee ""`** returns
+2. Else, **`gh pr list --label stage:changes-requested`** returns anything
+   → play **Implementer** on the oldest such PR: act on the review comment
+   (from the comment alone — see "Guarding role separation"), push the
+   fixes, reply saying what was accepted and what was not, and relabel the
+   PR and its linked issue back to `stage:in-review`. Revision work is
+   downstream of new work in exactly the same sense a review is, so it sits
+   above queries 3 and 4, not below them.
+3. Else, **`gh issue list --label stage:proposed --assignee ""`** returns
    anything → play **Implementer** on the oldest unclaimed issue.
-3. Else, **`gh issue list --label stage:proposed`**'s count is below
+4. Else, **`gh issue list --label stage:proposed`**'s count is below
    threshold N (default N = 3 — enough runway that the implementer role
    never stalls waiting on the researcher role's next tick, small enough
    that stale proposals don't pile up unimplemented) → play **Researcher**
    and file exactly one issue.
-4. Else, idle: log which condition was checked and why nothing fired, then
+5. Else, idle: log which condition was checked and why nothing fired, then
    stop this iteration.
 
 Follow the matching role's numbered instructions above exactly — the role
 selection only decides *which* numbered list to execute, it does not change
 what's in them.
 
+**Bounding the review/revision cycle.** Queries 1 and 2 hand a PR back and
+forth between the same session's two roles, so nothing in the loop itself
+stops that pair from cycling. Cap it: after **three** review rounds on one
+PR, the Reviewer does not open a fourth. It posts its findings, leaves the
+PR `stage:changes-requested`, and says explicitly that the round cap was
+reached and a human should look. The cap is deliberately *not* "approve it
+and move on" — the failure mode it guards against is two roles converging
+on each other, and auto-approving at the cap would resolve that in the one
+direction the whole pipeline exists to prevent. Rounds that each find a
+real, independently-verifiable defect are the cycle working, not looping;
+what the cap catches is the case where they stop doing that.
+
 **Chaining stops being safe to auto-continue past a MERGE-decided PR.**
 Reviewer step 5 labels a MERGE-approved PR `stage:approved-pending-merge`,
-which removes it from query 2 above — the chain correctly moves on to
+which removes it from query 1 above — the chain correctly moves on to
 Implementer/Researcher instead of looping on the same PR. But nothing
 downstream of that label fires again until a human actually merges (see
 below). That's intentional, not a gap: it's what keeps "chain until idle"
