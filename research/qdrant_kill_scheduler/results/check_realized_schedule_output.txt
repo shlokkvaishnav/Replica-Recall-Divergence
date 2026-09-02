@@ -1,0 +1,37 @@
+
+=== long-gap-same-node  (long-gap-same-node) ===
+ seq              target     req@    real@   drift  req gap  real gap   drift  flags
+   0    rrd-qdrant-node0      0.0      0.1   +0.07       --        --      --  
+   1    rrd-qdrant-node0     44.5     44.8   +0.25     40.0      37.1   -2.90  
+   2    rrd-qdrant-node0     89.0     89.1   +0.07     40.0      36.2   -3.76  
+  implied restart latency (docker start -> node back): +3.08 to +3.58s  -- this is what the gap loses
+  targeting: 1 distinct node(s) over 3 kills -- as requested
+
+=== short-gap-same-node  (short-gap-same-node) ===
+ seq              target     req@    real@   drift  req gap  real gap   drift  flags
+   0    rrd-qdrant-node0      0.0      0.2   +0.17       --        --      --  
+   1    rrd-qdrant-node0      9.5      9.6   +0.09      5.0       1.5   -3.47  
+   2    rrd-qdrant-node0     19.0     19.4   +0.39      5.0       2.2   -2.83  
+  implied restart latency (docker start -> node back): +3.13 to +3.39s  -- this is what the gap loses
+  targeting: 1 distinct node(s) over 3 kills -- as requested
+
+=== spread  (spread) ===
+ seq              target     req@    real@   drift  req gap  real gap   drift  flags
+   0    rrd-qdrant-node0      0.0      0.1   +0.06       --        --      --  
+   1    rrd-qdrant-node1     44.5     44.6   +0.07     40.0        --      --  
+   2    rrd-qdrant-node2     89.0     89.2   +0.15     40.0        --      --  
+  targeting: 3 distinct node(s) over 3 kills -- as requested
+
+==============================================================
+gap drift across all conditions (realized - requested):
+  n=4  mean=-3.24s  worst=-3.76s
+  tolerance for defining #9's conditions on REQUESTED spacing: +/-2.0s
+  -> OUTSIDE tolerance: #9 must define its conditions on REALIZED spacing, which every run records.
+
+implied restart latency across all runs: +3.08 to +3.58s
+  The drift is this latency, near-constant, subtracted from every
+  gap -- so it is proportionally severe at short gaps and minor at
+  long ones. Both conditions still land where the derived catch-up
+  distribution (median 16.0s, p90 26.4s) says they should.
+
+no targeting or liveness problems found.

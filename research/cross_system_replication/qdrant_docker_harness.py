@@ -107,6 +107,137 @@ def validator_loop(stop_evt, node_ids, violations: list, checks_run: list):
         stop_evt.wait(1.0)
 
 
+# --- controlled kill scheduling (issue #17) -------------------------------
+#
+# The default chaos_loop below randomizes timing and targeting, which is
+# correct for "does chaos cause divergence" but cannot answer "does kill
+# SPACING cause it" -- with a random schedule, spacing is read out of the
+# event log after the fact rather than set, which is exactly why PR #6's
+# healing-variance analysis could narrow its mechanism but not confirm it.
+#
+# These conditions make spacing and targeting independent variables. The
+# boundary between "short" and "long" is derived, not guessed: see
+# research/qdrant_kill_scheduler/derive_catchup_time.py, which measures
+# post-kill catch-up from PR #6's own committed sweep data as median 16.0s
+# (p90 26.4s, mean 19.3 +/- 13.8, n=25 measured of 42 kills). SHORT_GAP_S
+# sits well below that median, LONG_GAP_S comfortably above the p90.
+SHORT_GAP_S = 5.0
+LONG_GAP_S = 40.0
+
+# Down-time is FIXED across controlled conditions rather than randomized as
+# in chaos_loop. If it varied, a condition that happened to draw longer
+# outages would differ from its comparison in two ways at once, which is the
+# confound this whole scheduler exists to remove. The value is the rough
+# midpoint of chaos_loop's own 1-8s range.
+FIXED_DOWN_S = 4.5
+
+KILL_CONDITIONS = ("short-gap-same-node", "long-gap-same-node", "spread")
+
+
+def build_kill_schedule(condition: str, node_names: list, n_kills: int,
+                        window_s: float, target_node: str | None = None) -> list:
+    """Return the requested schedule as a list of dicts, without running it.
+
+    Each entry: {seq, target, at_s (offset from chaos start), gap_s
+    (requested gap since that node's previous restart, None for its first
+    kill), down_for_s}.
+
+    Separated from execution on purpose: a schedule can then be inspected,
+    tested and diffed against what actually happened, with no cluster
+    involved. Raises ValueError when the request does not fit the window,
+    rather than silently compressing gaps -- a schedule that quietly stopped
+    honouring its own spacing would reintroduce the confound while still
+    reporting the condition's name.
+    """
+    if condition not in KILL_CONDITIONS:
+        raise ValueError(f"unknown condition {condition!r}; "
+                         f"expected one of {KILL_CONDITIONS}")
+    if n_kills < 2:
+        raise ValueError("n_kills must be >= 2 for spacing to mean anything")
+
+    if condition == "spread":
+        if n_kills > len(node_names):
+            raise ValueError(
+                f"'spread' needs a distinct node per kill: n_kills={n_kills} "
+                f"> {len(node_names)} nodes. Reduce n_kills or use a "
+                f"same-node condition.")
+        # Spread evenly across the window so total elapsed chaos matches the
+        # same-node conditions as closely as the window allows.
+        gap = LONG_GAP_S
+        targets = list(node_names[:n_kills])
+    else:
+        gap = SHORT_GAP_S if condition == "short-gap-same-node" else LONG_GAP_S
+        targets = [target_node or node_names[0]] * n_kills
+
+    schedule, at = [], 0.0
+    for i in range(n_kills):
+        if i > 0:
+            at += FIXED_DOWN_S + gap
+        schedule.append({
+            "seq": i,
+            "target": targets[i],
+            "at_s": round(at, 3),
+            "gap_s": None if i == 0 else gap,
+            "down_for_s": FIXED_DOWN_S,
+        })
+
+    span = schedule[-1]["at_s"] + FIXED_DOWN_S
+    if span > window_s:
+        raise ValueError(
+            f"condition {condition!r} with n_kills={n_kills} needs "
+            f"{span:.1f}s but the chaos window is {window_s:.1f}s. Raise "
+            f"--chaos-duration or lower --kill-count; do not shorten the gap, "
+            f"which is the independent variable.")
+    return schedule
+
+
+def chaos_loop_scheduled(stop_evt, containers: dict, events: list,
+                         schedule: list, condition: str):
+    """Execute a schedule from build_kill_schedule, recording realized timing.
+
+    Records requested AND realized values per kill so realized-vs-requested is
+    checkable per run rather than trusted: `gap_s` is what was asked for,
+    `realized_gap_s` is measured from that node's previous restart. Also flags
+    `killed_while_down`, the failure mode a short gap can produce -- killing a
+    container that has not finished coming back is a different fault from the
+    one under study and must be visible, not counted as an ordinary kill.
+    """
+    started = time.time()
+    last_restart_at = {}
+    for step in schedule:
+        wait = step["at_s"] - (time.time() - started)
+        if wait > 0 and stop_evt.wait(wait):
+            break
+        if stop_evt.is_set():
+            break
+        name = step["target"]
+        c = containers[name]
+        was_alive = c.is_alive()
+        prev = last_restart_at.get(name)
+        t0 = time.time()
+        c.kill()
+        if stop_evt.wait(step["down_for_s"]):
+            c.start()
+            break
+        alive = c.start()
+        last_restart_at[name] = time.time()
+        events.append({
+            "t": t0,
+            "target": name,
+            "alive_after_restart": alive,
+            "down_for_s": step["down_for_s"],
+            "restart_count": c.restart_count,
+            # --- controlled-schedule provenance (issue #17) ---
+            "condition": condition,
+            "seq": step["seq"],
+            "requested_at_s": step["at_s"],
+            "realized_at_s": round(t0 - started, 3),
+            "requested_gap_s": step["gap_s"],
+            "realized_gap_s": (None if prev is None else round(t0 - prev, 3)),
+            "killed_while_down": not was_alive,
+        })
+
+
 def chaos_loop(stop_evt, containers: dict, events: list,
               min_interval=3.0, max_interval=6.0, min_down=1.0, max_down=8.0):
     """Same shape as chaos_harness.chaos_loop -- kill one target, hold it
