@@ -114,13 +114,15 @@ Two transient infrastructure failures happened during this sweep and are recorde
 
 ## Interpretation
 
+> ⚠️ **CORRECTED — see "Correction: the `index_recall` null was not a measurement of graph quality" at the end of this file (2026-09-02).** PR #11 showed this paragraph's central comparison was taken over a corpus that was not HNSW-indexed for most or all of the measurement window. The paragraph is left as written, per `GIT_WORKFLOW.md`'s rule against rewriting the record; read it with the correction.
+
 **The headline finding, and it is a real cross-system difference, not a replication of nano-db's result:** `index_recall` — the graph-quality metric, isolated from data content by construction (see `metrics.py`'s module docstring) — does **not** separate between baseline and chaos on Qdrant (p=1.0000, means differ by 0.0002). This is the opposite of nano-db's own established result, where `index_recall` *does* separate under chaos (per `../replica_recall/RESULTS.md`'s Verdict block, "index_recall separates -- failure damages the graph independently of what data is missing"). `completeness` and `e2e_recall` *do* separate on Qdrant, cleanly, at the same statistical floor nano-db's headline result reaches. Put together: on Qdrant, under this fault model, chaos causes replicas to diverge in **what data they hold**, but not in **the quality of the ANN graph built over what they do hold**. This directly falsifies the pilot's tentative read (SPEC.md's earlier pilot section: "no `index_recall` degradation... beyond ordinary sample-to-sample noise") as a real, now-5-seed-confirmed finding rather than a single-seed impression — good, since that pilot read turned out to be exactly right, but it is important that this addendum is not just repeating the pilot's claim with more confidence; it is an independent confirmation at the pre-registered N.
 
 This maps onto the original Hypothesis/Null-hypothesis framing precisely at the point that framing anticipated being genuinely hard to call: the Hypothesis predicted *some* divergence because "an HNSW-family graph is not insertion-order invariant" is a property of the family, not of nano-db specifically — and no `index_recall` divergence here is evidence *against* that specific mechanism being active on Qdrant, not evidence against divergence generally, since `completeness`/`e2e_recall` divergence is real and large. This is closest to a **partial-null**: the null holds for the graph-quality channel, the alternative (divergence happens) holds for the data-content channel. Neither the original Hypothesis nor the flat Null as stated anticipated this split cleanly — worth being explicit that the pre-registered hypothesis was under-specified on this axis, not that the result contradicts it outright.
 
 **Healing is genuinely mixed, not resolved.** 1/5 fully healed, 1/5 had almost nothing to heal from, 2/5 partially healed, 1/5 got worse after chaos stopped. This rules out both clean stories: it is not "Qdrant always heals" (4/5 didn't fully) and not "Qdrant never heals" (1/5 did, cleanly, to 100%). The pilot's single seed (20260900, not part of this 5-seed set) showed monotonic partial healing that hadn't resolved by the end of its window — consistent with this being a real, seed-dependent phenomenon rather than pilot noise, but the *mechanism* behind the variance (chaos timing/target-node luck? optimizer timing? something else?) is unexamined — Decision item 2 below.
 
-**What this establishes and does not.** Establishes, at the pre-registered 5-seed floor: cross-replica divergence is real and measurable on Qdrant under this fault model (spread separates cleanly); the divergence is concentrated in data completeness, not graph quality, unlike nano-db; healing is inconsistent across seeds rather than reliably present or absent. Does **not** establish: *why* index_recall doesn't separate on Qdrant (segment-merge/optimizer masking graph-level effects, as flagged in Confounds, remains unchecked — Decision item 4); *why* healing varies by seed; or anything about Weaviate or other anti-entropy-bearing systems, which remain the natural next comparison per the Motivation section.
+**What this establishes and does not.** Establishes, at the pre-registered 5-seed floor: cross-replica divergence is real and measurable on Qdrant under this fault model (spread separates cleanly); healing is inconsistent across seeds rather than reliably present or absent. ~~the divergence is concentrated in data completeness, not graph quality, unlike nano-db~~ — **struck 2026-09-02: this belonged on the other side of the line all along, and PR #11 established why; see the correction addendum.** Does **not** establish: that Qdrant's graph quality is unaffected by chaos, or that it differs from nano-db on that axis — the `index_recall` comparison behind that reading was not a measurement of graph quality (correction addendum); *why* index_recall doesn't separate on Qdrant — originally attributed here to unchecked segment-merge/optimizer masking (Decision item 4), which PR #11 has since replaced with a more basic explanation; *why* healing varies by seed; or anything about Weaviate or other anti-entropy-bearing systems, which remain the natural next comparison per the Motivation section.
 
 ## Decision
 
@@ -154,3 +156,57 @@ Per Decision item 2, checked whether the 5-seed sweep's healing variance (recove
 **This does not hold up as a complete explanation.** `20260912` had no repeated node at all (each of its 2 kills hit a different node, with plenty of recovery time by construction) yet still only recovered 25% — the second-worst non-floor outcome. If "avoid hitting the same node twice without a recovery window" were the full story, `20260912` should have healed cleanly like `20260914` (also no repeats), and it didn't. Write-failure rate alone doesn't rank cleanly either: `20260914` (100% healed) had a *higher* failure rate (5.3%) than `20260912` (25% healed, 5.0%) — so elevated write pressure by itself isn't sufficient either.
 
 **Conclusion: genuinely unresolved at n=5, narrowed but not confirmed.** The same-node-repeat-timing story is the best available single-variable candidate (it uniquely picks out the worst case correctly) but visibly fails to rank the other four seeds, and no other single variable checked here (event count, write-failure rate, confirmed-write volume) does better. This is not enough seeds to fit or rule out a multi-variable explanation responsibly — a purpose-built follow-up that *deliberately* varies inter-kill spacing and target-node repetition as controlled, not incidental, variables (rather than reading tea leaves from `chaos_loop`'s random schedule after the fact) is the honest way to actually answer this, not a larger version of the same random sweep. Recorded here as a narrowed hypothesis for that follow-up, not a finding.
+
+## Correction: the `index_recall` null was not a measurement of graph quality (2026-09-02)
+
+Filed as issue #15, per PR #11's Decision item 2, which recorded this correction
+as needed and deliberately left it unwritten ("this addendum reports the second
+run's evidence, it does not decide what to do with it").
+
+**What PR #11 found.** `research/qdrant_optimizer_masking/` instrumented Qdrant's
+`/collections/{name}` endpoint (`--capture-telemetry`) at this sweep's own scale
+and protocol, across two seeds:
+
+| | seed 20260920 | seed 20260921 |
+|---|---|---|
+| first telemetry sample with any node indexed | t=83.1s | t=158.4s (after nominal run end) |
+| chaos window | t=50.3-131.9s | t=50.1-116.9s |
+| `index_recall` samples taken with **zero** vectors indexed on every node | 32 of 53 (60%) | 62 of 74 (84%) |
+| mean `index_recall`, unindexed bucket | 0.9951 | 0.9924 |
+| mean `index_recall`, partially-indexed bucket | 0.9958 (n=21) | 0.9912 (n=12) |
+
+For seed 20260921 the entire baseline period *and* the entire chaos window ran
+with nothing indexed on any node.
+
+**Why that invalidates the reading, not just the number.** Qdrant serves
+unindexed segments by exact scan. A search over a flat segment is exact by
+construction, so `index_recall` measured against it is ~1.0 whether or not chaos
+damaged anything -- there is no approximate graph in the loop to damage. For most
+of this sweep's measurement window, `index_recall` was therefore not measuring
+the quantity it is defined to measure. A null in that window is not evidence that
+the graph resisted chaos; it is the absence of a measurement.
+
+**What the corrected claim is.** On Qdrant, under this fault model: cross-replica
+divergence in *data completeness* is real and separates cleanly (unaffected by
+this correction -- `completeness` involves no search at all, and `e2e_recall`'s
+separation is likewise not explained by indexing state). Whether Qdrant's
+replicated HNSW graph diverges in quality under chaos is **untested**, on this
+sweep and on any other. The earlier framing -- a real cross-system difference from
+nano-db on the graph-quality axis -- is withdrawn in both directions: there is no
+evidence Qdrant differs from nano-db here, and none that it agrees.
+
+**What this correction does not do.** It does not show Qdrant's graph *would*
+diverge once fully indexed; PR #11 says so explicitly, since its own runs never
+finished indexing either. It does not touch this sweep's completeness, spread, or
+healing findings. And it does not resolve the original optimizer/segment-merge
+hypothesis (Decision item 4 above), which remains untested and is now a question
+for a future run that indexes the corpus *before* measurement starts -- the
+protocol fix PR #11's Decision item 4 describes, tracked separately as a
+`method/*` change, not folded in here.
+
+**Why the original text is struck through rather than deleted.** `GIT_WORKFLOW.md`:
+history is not rewritten to make the project look more linear than it was. The
+claim was made, it was wrong for a reason worth remembering, and the reason -- a
+metric quietly measuring something other than what it is defined to measure,
+because of a system behavior nobody had instrumented -- is more transferable than
+the correction.
