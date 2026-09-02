@@ -73,6 +73,35 @@ An infeasible request raises instead of compressing gaps. A schedule that quietl
 stopped honouring its own spacing while still reporting its condition's name
 would reintroduce the confound invisibly — worse than a failed run.
 
+## What the live run found
+
+Validated against a live 3-node cluster, one run per condition (`results/`):
+
+| condition | requested gap | realized gaps | targeting |
+|---|---|---|---|
+| `short-gap-same-node` | 5.0s | **1.5s, 2.2s** | 1 node, as asked |
+| `long-gap-same-node` | 40.0s | **37.1s, 36.2s** | 1 node, as asked |
+| `spread` | n/a | n/a | 3 distinct nodes, as asked |
+
+Targeting is exact and kill *timing* lands within +0.4s of request. Kill
+*spacing* is systematically ~3.3s short, because `docker start` returns only
+once the container is actually back -- measured at **+3.08s to +3.58s**, a
+near-constant offset rather than noise.
+
+A constant ~3.3s takes 66% off a 5s gap and 8% off a 40s one. The conditions end
+up *further* apart in realized terms than requested, and both still sit where the
+catch-up distribution says they should. **The design survives; the labels do
+not** -- calling the short condition "5s" misreports it threefold, so #9 must
+define its conditions on realized spacing. Every run records it.
+
+```
+python research/qdrant_kill_scheduler/check_realized_schedule.py
+```
+
+The latency is recorded, not compensated for. Padding requested gaps to absorb
+it would leave residual error while making runs *look* exact -- trading a
+visible bias for a hidden one.
+
 ## Validating it
 
 ```
@@ -80,7 +109,8 @@ python research/qdrant_kill_scheduler/test_kill_schedule.py     # 24 checks, no 
 ```
 
 The tests print what they do **not** cover rather than leaving it implied. The
-important gap: every check runs against a fake container that restarts instantly,
-so realized-vs-requested drift under a real Qdrant restart — issue #17's own
-anticipated failure mode — can only be measured on a live cluster and has not
-been. The instrument is built to make that drift visible, not to prevent it.
+important gap is the one above: every check runs against a fake container that
+restarts instantly, so its restart latency is zero by construction. All 24 passed
+while the real ~3.3s bias sat undetected — which is precisely why the live run
+was worth twelve minutes, and why the instrument was built to make drift visible
+rather than to prevent it.

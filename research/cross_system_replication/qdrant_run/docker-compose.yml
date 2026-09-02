@@ -1,0 +1,45 @@
+services:
+  qdrant-node0:
+    image: qdrant/qdrant@sha256:057ee3a8da769fe7310dd3537b4dc7583bf87a95ce8ac43c0af5a46bc580d1fc
+    container_name: rrd-qdrant-node0
+    environment:
+      - QDRANT__CLUSTER__ENABLED=true
+    command: ["./qdrant", "--uri", "http://qdrant-node0:6335"]
+    ports:
+      - "16333:6333"
+      - "16350:6334"
+      - "16370:6335"
+    volumes:
+      - rrd-qdrant-data0:/qdrant/storage
+  qdrant-node1:
+    image: qdrant/qdrant@sha256:057ee3a8da769fe7310dd3537b4dc7583bf87a95ce8ac43c0af5a46bc580d1fc
+    container_name: rrd-qdrant-node1
+    environment:
+      - QDRANT__CLUSTER__ENABLED=true
+    command: ["./qdrant", "--bootstrap", "http://qdrant-node0:6335", "--uri", "http://qdrant-node1:6335"]
+    ports:
+      - "16334:6333"
+      - "16351:6334"
+      - "16371:6335"
+    volumes:
+      - rrd-qdrant-data1:/qdrant/storage
+    depends_on:
+      - qdrant-node0
+  qdrant-node2:
+    image: qdrant/qdrant@sha256:057ee3a8da769fe7310dd3537b4dc7583bf87a95ce8ac43c0af5a46bc580d1fc
+    container_name: rrd-qdrant-node2
+    environment:
+      - QDRANT__CLUSTER__ENABLED=true
+    command: ["./qdrant", "--bootstrap", "http://qdrant-node0:6335", "--uri", "http://qdrant-node2:6335"]
+    ports:
+      - "16335:6333"
+      - "16352:6334"
+      - "16372:6335"
+    volumes:
+      - rrd-qdrant-data2:/qdrant/storage
+    depends_on:
+      - qdrant-node0
+volumes:
+  rrd-qdrant-data0:
+  rrd-qdrant-data1:
+  rrd-qdrant-data2:

@@ -2,8 +2,8 @@
 
 **Branch:** `method/qdrant-kill-scheduler`
 **Date opened:** 2026-09-02
-**Status:** IN PROGRESS - instrument built and validated without a cluster; the
-live-cluster validation run (expected outcome (b)'s only real test) is not done.
+**Status:** COMPLETE - instrument built, validated off-cluster, and validated
+against a live 3-node Qdrant cluster. Outcome (b) fired: see the addendum.
 
 Issue: closes #17. Body copied verbatim below (heading levels normalized).
 
@@ -193,3 +193,66 @@ container is worth merging ahead of that run. The argument for is that the code
 is inert by default and the schedules it produces are checkable as data. The
 argument against is that #17's own Metrics section asks for realized-vs-requested
 from a live run, and that has not been produced.
+
+## Addendum: live-cluster validation (2026-09-02) - outcome (b) fired
+
+The run this spec's Decision section said was missing has now been done: one run
+per condition against a live 3-node Qdrant cluster on the pinned image, real
+SIFT data (20k vectors), `--kill-count 3`, 150s chaos window, 200s total. All
+three completed cleanly (210/204/204 samples, 3 chaos events each, 20,000
+vectors confirmed). Raw output in `results/<condition>/`, checker output in
+`results/check_realized_schedule_output.txt`.
+
+**Targeting is exact.** Same-node conditions hit one node for all three kills;
+`spread` hit three distinct nodes. No kill landed on a down container, no node
+failed to come back.
+
+**Kill *timing* is near-exact.** Realized offsets from chaos start drifted
++0.06s to +0.39s from requested across all nine kills.
+
+**Kill *spacing* is systematically short, and this is outcome (b).**
+
+| condition | requested gap | realized gaps |
+|---|---|---|
+| short-gap-same-node | 5.0s | 1.5s, 2.2s |
+| long-gap-same-node | 40.0s | 37.1s, 36.2s |
+| spread | n/a (no same-node repeat) | n/a |
+
+Mean drift -3.24s, worst -3.76s, against a +/-2.0s tolerance. **Outside
+tolerance, so #9 must define its conditions on realized rather than requested
+spacing** - which every run already records, because the instrument was built
+expecting exactly this.
+
+**The cause is identified, not left as noise.** `DockerContainer.start()`
+returns only once Docker has actually restarted the container, so the node comes
+back later than `kill + down_for_s` implies, and that lateness is subtracted
+from the gap. Derived from the events alone: **+3.08s to +3.58s** across all
+runs. It is a near-constant offset, not variance.
+
+**Why that is proportionally severe at one end.** A ~3.3s constant removes 66%
+of a 5s gap and 8% of a 40s one. The conditions are further apart in realized
+terms (1.5-2.2s vs 36-37s) than requested, not closer - so they remain
+distinguishable, and both still sit where the derived catch-up distribution says
+they should: the short condition far below the 16.0s median, the long one above
+the 26.4s p90. **The design survives; its labels do not.** Calling the short
+condition "5s" would misreport it by a factor of three.
+
+**What this vindicates about the split.** The fake-container tests passed 24/24
+and could not have found this - `FakeContainer.start()` returns instantly, so
+its restart latency is zero by construction. Only the live run could, it took
+about twelve minutes, and it changed how #9's independent variable has to be
+defined. Had the sweep been run first, it would have produced hours of data
+labelled with gaps that were wrong by 66% at the short end.
+
+## Decision (updated)
+
+**MERGE**, self-assessed, revised from the REVISE above now that #17's Metrics
+deliverable - a validation run per condition with realized checked against
+requested - exists. The instrument does what it claims, its one systematic bias
+is measured, explained, and recorded per-run rather than corrected away, and the
+consequence for #9 is stated: define conditions on realized spacing.
+
+Deliberately *not* done: compensating for the latency by padding requested gaps.
+It varies 3.08-3.58s, so padding would leave residual error while making runs
+look exact - trading a visible, recorded bias for a hidden one. Recording beats
+correcting here.
