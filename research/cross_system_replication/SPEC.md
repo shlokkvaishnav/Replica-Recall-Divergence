@@ -187,9 +187,13 @@ the quantity it is defined to measure. A null in that window is not evidence tha
 the graph resisted chaos; it is the absence of a measurement.
 
 **What the corrected claim is.** On Qdrant, under this fault model: cross-replica
-divergence in *data completeness* is real and separates cleanly (unaffected by
-this correction -- `completeness` involves no search at all, and `e2e_recall`'s
-separation is likewise not explained by indexing state). Whether Qdrant's
+divergence in *data completeness* is real and separates cleanly. `completeness`
+is unaffected by this correction in the strict sense -- it involves no search at
+all, so indexing state cannot bear on it. `e2e_recall`'s separation is also real,
+but it survives as a **floor rather than an unaffected quantity**: it is a
+retrieval metric, served by exact scan during the unindexed window, so what it
+measured is the separation that data loss alone produces. A fully-indexed run
+could show the same or more, never less. Whether Qdrant's
 replicated HNSW graph diverges in quality under chaos is **untested**, on this
 sweep and on any other. The earlier framing -- a real cross-system difference from
 nano-db on the graph-quality axis -- is withdrawn in both directions: there is no

@@ -100,11 +100,16 @@ The three claim sites the issue named, and what each needed:
 Plus a full correction addendum at the end of the cross-system spec, carrying PR
 #11's two-seed telemetry table as the evidence.
 
-**Confirmed unaffected, and deliberately not touched:** `completeness`,
-`e2e_recall`, within-shard spread, and the healing results. None involve the HNSW
-graph — `completeness` involves no search at all — so indexing state does not
-bear on them. This was checked, not assumed; it is also the issue's outcome (b)
-trigger, and it did not fire.
+**Checked rather than assumed, and deliberately not touched:** `completeness`,
+within-shard spread and the healing results are unaffected in the strict sense —
+none involves a retrieval step (`completeness` involves no search at all), so
+indexing state cannot bear on them. `e2e_recall` is the exception, and review
+round 1 caught it being lumped in with the others: it *is* a retrieval metric,
+served by exact scan during the unindexed window, so its separation survives as a
+**floor** — what data loss alone produces — rather than as a quantity indexing
+cannot touch. A fully-indexed run could show the same or more, never less. The
+issue's outcome (b) trigger did not fire: none of these needed re-scoping, only
+`e2e_recall` needed re-wording.
 
 ## Interpretation
 
@@ -134,3 +139,25 @@ figure traces to PR #11's committed telemetry. The correction is bounded to the
 one claim the evidence reaches, the adjacent findings were checked rather than
 assumed unaffected, and the protocol fix PR #11's Decision item 4 calls for is
 left to its own `method/*` branch rather than folded in.
+
+## Addendum: review round 1 (2026-09-02)
+
+The reviewer recomputed the correction's evidence from
+`../qdrant_optimizer_masking/results/`'s CSVs directly rather than from PR #11's
+prose or its own analysis script -- first-indexed t=83.075s / t=158.446s, 32-of-53
+and 62-of-74 unindexed, means 0.9951/0.9958 and 0.9924/0.9912 -- and all of it
+reproduced exactly. Seed 20260921's kill timestamps (t=55.96, 73.90, 87.97, from
+`events_instrumented_seed20260921.json`) were checked independently against that
+seed's first-indexed sample, confirming the entire chaos window ran unindexed.
+
+One finding, accepted: this file and the correction addendum both listed
+`e2e_recall` alongside `completeness` as "unaffected." It is not, in the same
+sense. `completeness` involves no retrieval at all; `e2e_recall` does, and was
+served by exact scan during the unindexed window, so its separation is a **floor**
+-- the amount data loss alone produces -- rather than a quantity indexing state
+cannot touch. Both files now say so.
+
+The pattern is worth recording because it is the fourth instance this session and
+the most pointed: the over-claim appeared *inside a correction of an over-claim*,
+in the specific clause asserting that something had been checked rather than
+assumed. Whatever produces this bias is not suppressed by working on the bias.
