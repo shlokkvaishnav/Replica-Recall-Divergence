@@ -55,13 +55,22 @@ def load_telemetry(path):
     return {n: sorted(v) for n, v in by.items()}
 
 
+JOIN = "nearest"   # set from --join; "bracket" = min over both neighbouring polls
+
+
 def fraction_at(tele_node, t):
-    """indexed fraction of one node at the telemetry sample nearest t."""
+    """indexed fraction of one node at time t. "nearest": the telemetry poll
+    nearest t (pre-registered). "bracket": the MIN over the polls before and
+    after t -- stricter, because a restarted node re-indexes in 5-17s (#29)
+    while polls are ~5s apart, so a sample inside that window could be
+    tagged >= bar by a neighbouring poll (review round 1 on PR #31)."""
     if not tele_node:
         return None
     ts = [x[0] for x in tele_node]
     i = bisect.bisect_left(ts, t)
     cands = [j for j in (i - 1, i) if 0 <= j < len(ts)]
+    if JOIN == "bracket":
+        return min(tele_node[j][1] for j in cands)
     j = min(cands, key=lambda j: abs(ts[j] - t))
     return tele_node[j][1]
 
@@ -113,7 +122,12 @@ def main() -> int:
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("results_dir", nargs="?", default=os.path.join(HERE, "results"))
     ap.add_argument("--bar", type=float, default=0.95)
+    ap.add_argument("--join", choices=("nearest", "bracket"), default="nearest",
+                    help="how a sample gets its indexed fraction: nearest poll "
+                         "(pre-registered) or min of both bracketing polls (stricter)")
     a = ap.parse_args()
+    global JOIN
+    JOIN = a.join
 
     run0 = os.path.join(a.results_dir, "run0", "gate_scores.json")
     if os.path.exists(run0):
@@ -168,7 +182,7 @@ def main() -> int:
             "written": meta.get("written_at_gate"),
         }
 
-    print(f"bar = {a.bar}   (per-round worst replica; conditioned = replicas >= bar indexed)")
+    print(f"bar = {a.bar}   join = {a.join}   (per-round worst replica; conditioned = replicas >= bar indexed)")
     print("cond      seed        gate   written   rounds  retained   uncond_mean  cond_mean  strict_mean(n)")
     for cond in ("baseline", "chaos", "quiesce"):
         for seed, r in sorted(per.get(cond, {}).items()):
