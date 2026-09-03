@@ -1,24 +1,26 @@
 ==============================================================================
 Validity preconditions (SPEC.md Amendment 4) -- evaluated before comparing
 ==============================================================================
-run                                  interval samples  dmgd spk/kill  exhaust  kwd
-long-gap-same-node_seed20260950          3.82      64     8     2.67    False    0
-long-gap-same-node_seed20260951          4.53      60     9     3.00    False    0
-long-gap-same-node_seed20260952          4.36      59     8     2.67    False    0
-long-gap-same-node_seed20260953          4.43      56     9     3.00    False    0
-long-gap-same-node_seed20260954          4.00      54     6     2.00    False    0
-short-gap-same-node_seed20260950         4.27      64     4     1.33    False    0
-short-gap-same-node_seed20260951         3.53      61     7     2.33    False    0
-short-gap-same-node_seed20260952         4.19      68     6     2.00    False    0
-short-gap-same-node_seed20260953         4.14      52     3     1.00    False    0
-short-gap-same-node_seed20260954         4.70      60     6     2.00    False    0
-spread_seed20260950                      4.33      58    10     3.33    False    0
-spread_seed20260951                      4.80      57     7     2.33    False    0
-spread_seed20260952                      4.30      65     5     1.67    False    0
-spread_seed20260953                      3.76      71     8     2.67    False    0
-spread_seed20260954                      4.25      63     7     2.33    False    0
+run                                  interval samples  dmgd episodes eps/kill  exhaust  kwd
+long-gap-same-node_seed20260950          3.82      64     8        3     1.00    False    0
+long-gap-same-node_seed20260951          4.53      60     9        3     1.00    False    0
+long-gap-same-node_seed20260952          4.36      59     8        3     1.00    False    0
+long-gap-same-node_seed20260953          4.43      56     9        3     1.00    False    0
+long-gap-same-node_seed20260954          4.00      54     6        3     1.00    False    0
+short-gap-same-node_seed20260950         4.27      64     4        3     1.00    False    0
+short-gap-same-node_seed20260951         3.53      61     7        2     0.67    False    0
+short-gap-same-node_seed20260952         4.19      68     6        3     1.00    False    0
+short-gap-same-node_seed20260953         4.14      52     3        1     0.33    False    0
+short-gap-same-node_seed20260954         4.70      60     6        3     1.00    False    0
+spread_seed20260950                      4.33      58    10        3     1.00    False    0
+spread_seed20260951                      4.80      57     7        3     1.00    False    0
+spread_seed20260952                      4.30      65     5        3     1.00    False    0
+spread_seed20260953                      3.76      71     8        3     1.00    False    0
+spread_seed20260954                      4.25      63     7        3     1.00    False    0
 
-  overall spikes per kill : 2.29  (precondition >= 2.0) -> PASS
+  EPISODES per kill        : 0.93  (precondition >= 2.0) -> FAIL
+  damaged SAMPLES per kill : 2.29  (NOT the precondition -- finer sampling inflates this by counting one episode repeatedly)
+  samples per episode      : mean 2.45  max 7  single-sample 11/42
   median interval         : 4.27s  (precondition <= 4.0s)
 
   realized gaps (Amendment 1 -- realized, never requested):
@@ -39,6 +41,7 @@ spread_seed20260954                      4.25      63     7     2.33    False   
     - spread_seed20260951: interval 4.80s > 4.0s
     - spread_seed20260952: interval 4.30s > 4.0s
     - spread_seed20260954: interval 4.25s > 4.0s
+    - episodes per kill 0.93 < 2.0 (damaged samples per kill is 2.29, but that is not what the precondition asks)
 
 ==============================================================================
 PRIMARY: mean missing ids over the observation window (duration-normalized)

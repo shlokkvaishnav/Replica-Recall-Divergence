@@ -56,6 +56,21 @@ def load(run_dir):
         pts[t] = max(pts.get(t, 0.0), miss)
     ts = sorted(pts)
 
+    # A damaged SAMPLE and a damage EPISODE are different things, and conflating
+    # them overstates how much better the sampling got: finer sampling counts the
+    # same episode more times, which is a real gain but not the same gain as
+    # observing more episodes. Amendment 4's ">= 2 spikes per kill" means
+    # episodes; both are reported so the precondition cannot be read two ways.
+    episodes, run = [], 0
+    for t in ts:
+        if pts[t] > 0.5:
+            run += 1
+        elif run:
+            episodes.append(run)
+            run = 0
+    if run:
+        episodes.append(run)
+
     t0 = meta["chaos_start_rel"]
     obs = [(t, pts[t]) for t in ts if t >= t0]      # chaos start -> run end
     integrated = sum((obs[i][0] - obs[i - 1][0]) * (obs[i][1] + obs[i - 1][1]) / 2
@@ -69,7 +84,9 @@ def load(run_dir):
         "n_kills": len(events),
         "interval": statistics.median([ts[i] - ts[i - 1] for i in range(1, len(ts))]),
         "n_samples": len(ts),
-        "n_damaged": sum(1 for t in ts if pts[t] > 0.5),
+        "n_damaged": sum(1 for t in ts if pts[t] > 0.5),   # samples
+        "n_episodes": len(episodes),                       # contiguous runs
+        "episode_lens": episodes,
         "mean_missing": (integrated / dur) if dur else float("nan"),   # PRIMARY
         "integrated": integrated,
         "peak": max(pts.values()) if pts else 0.0,
@@ -98,13 +115,13 @@ def main():
     print("Validity preconditions (SPEC.md Amendment 4) -- evaluated before comparing")
     print("=" * 78)
     print(f"{'run':<36}{'interval':>9}{'samples':>8}{'dmgd':>6}"
-          f"{'spk/kill':>9}{'exhaust':>9}{'kwd':>5}")
+          f"{'episodes':>9}{'eps/kill':>9}{'exhaust':>9}{'kwd':>5}")
     fails = []
     for r in sorted(runs, key=lambda x: (x["condition"] or "", x["seed"] or 0)):
-        spk = r["n_damaged"] / r["n_kills"] if r["n_kills"] else 0
+        epk = r["n_episodes"] / r["n_kills"] if r["n_kills"] else 0
         print(f"{r['name']:<36}{r['interval']:>9.2f}{r['n_samples']:>8}"
-              f"{r['n_damaged']:>6}{spk:>9.2f}{str(r['exhausted']):>9}"
-              f"{r['killed_while_down']:>5}")
+              f"{r['n_damaged']:>6}{r['n_episodes']:>9}{epk:>9.2f}"
+              f"{str(r['exhausted']):>9}{r['killed_while_down']:>5}")
         if r["interval"] > MAX_INTERVAL_S:
             fails.append(f"{r['name']}: interval {r['interval']:.2f}s > {MAX_INTERVAL_S}s")
         if r["exhausted"]:
@@ -112,15 +129,27 @@ def main():
         if r["killed_while_down"]:
             fails.append(f"{r['name']}: {r['killed_while_down']} kill(s) on a down node")
 
-    all_spk = sum(r["n_damaged"] for r in runs) / sum(r["n_kills"] for r in runs)
-    print(f"\n  overall spikes per kill : {all_spk:.2f}  "
+    kills = sum(r["n_kills"] for r in runs)
+    all_eps = sum(r["n_episodes"] for r in runs) / kills
+    all_smp = sum(r["n_damaged"] for r in runs) / kills
+    all_len = [x for r in runs for x in r["episode_lens"]]
+    print(f"\n  EPISODES per kill        : {all_eps:.2f}  "
           f"(precondition >= {MIN_SPIKES_PER_KILL}) -> "
-          f"{'PASS' if all_spk >= MIN_SPIKES_PER_KILL else 'FAIL'}")
+          f"{'PASS' if all_eps >= MIN_SPIKES_PER_KILL else 'FAIL'}")
+    print(f"  damaged SAMPLES per kill : {all_smp:.2f}  "
+          f"(NOT the precondition -- finer sampling inflates this by counting "
+          f"one episode repeatedly)")
+    if all_len:
+        print(f"  samples per episode      : mean {statistics.mean(all_len):.2f}"
+              f"  max {max(all_len)}  "
+              f"single-sample {sum(1 for x in all_len if x == 1)}/{len(all_len)}")
     print(f"  median interval         : "
           f"{statistics.median([r['interval'] for r in runs]):.2f}s  "
           f"(precondition <= {MAX_INTERVAL_S}s)")
-    if all_spk < MIN_SPIKES_PER_KILL:
-        fails.append(f"overall spikes/kill {all_spk:.2f} < {MIN_SPIKES_PER_KILL}")
+    if all_eps < MIN_SPIKES_PER_KILL:
+        fails.append(f"episodes per kill {all_eps:.2f} < {MIN_SPIKES_PER_KILL} "
+                     f"(damaged samples per kill is {all_smp:.2f}, but that is "
+                     f"not what the precondition asks)")
 
     print("\n  realized gaps (Amendment 1 -- realized, never requested):")
     spans = {}

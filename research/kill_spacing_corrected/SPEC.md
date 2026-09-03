@@ -105,7 +105,7 @@ The damage signal is a brief spike, and #9 sampled it roughly once per episode:
 | damage spikes observed per kill | **0.69** |
 | samples showing damage | 31 of 305 (10.2%) |
 | effective sample interval | **10.9s median** |
-| episode duration | under one sample interval (never two consecutive damaged samples) |
+| episode duration | ~~under one sample interval (never two consecutive damaged samples)~~ **WRONG - corrected below**: #9's episodes averaged 1.24 samples and one spanned 5 |
 
 So roughly a third of kills produced no observed damage at all, and where damage
 was seen its magnitude is whatever a single sample happened to catch - not a
@@ -158,7 +158,7 @@ alongside rather than instead.
 
 - **Realized sample interval > 4s median in any condition.** Void, re-run. The
   whole point is resolving the transient.
-- **Fewer than 2 damage spikes per kill on average.** Then the phenomenon is
+- **Fewer than 2 damage EPISODES per kill on average** (a contiguous run of damaged samples is one episode; finer sampling inflates a damaged-sample count by measuring one episode repeatedly). Then the phenomenon is
   still under-sampled and no comparison should be drawn, however tempting the
   numbers look.
 - **Any condition showing zero damage across all 5 seeds** - void for that
@@ -188,8 +188,9 @@ Amendments 1-3 all worked, and measurably:
 | short/long realized gaps | separated | separated (0.18-2.08s vs 31.34-37.93s) |
 | `probe_s` median | 3.31s | **1.14s** (`--queries` 100 -> 10) |
 | effective sample interval | 10.9s | **4.27s** |
-| damage spikes per kill | 0.69 | **2.29** |
-| samples per damage episode | 1 (never two consecutive) | **2.45 mean, max 7** |
+| damage **episodes** per kill | 0.56 | **0.93** |
+| damaged **samples** per kill | 0.69 | 2.29 (inflated by finer sampling - not a like-for-like gain) |
+| samples per damage episode | 1.24 mean, max 5 | **2.45 mean, max 7** |
 
 Amendment 1's premise held: damage is lagged, and observing 60s+ past the last
 kill captured episodes that #9's protocol and #24's original proposal would both
@@ -210,8 +211,10 @@ technicality to reason past -- a quarter of episodes are still measured by
 whichever single sample happened to land on them, which is #9's defect at
 reduced amplitude.
 
-The spikes-per-kill precondition (>= 2.0) passed at 2.29. One precondition
-passing does not rescue the other.
+The episodes-per-kill precondition also **fails** at 0.93 (see the review
+addendum: 2.29 counts damaged samples, not episodes, and is not what Amendment 4
+asks for). **Both preconditions fail**, which makes the void call stronger than
+the first write-up of this section claimed.
 
 ### The numbers, recorded because they exist, NOT reportable as a result
 
@@ -290,3 +293,44 @@ related but distinct reason.
 Next, pre-registered separately: a cheaper completeness probe, then this
 experiment again. Not another sweep at these parameters, which would reproduce
 this outcome exactly.
+
+## Addendum: review round 1 (2026-09-02) - two overstatements, both mine
+
+The reviewer recomputed the primary metric from raw CSVs without this branch's
+analyzer (185.3 / 128.3 / 148.7, p = 0.5476 / 0.8413 / 0.6905 - exact match) and
+found two defects, both in the *comparison against #9* rather than in this
+sweep's data, and both flattering the redesign.
+
+**1. "Damage spikes per kill 0.69 -> 2.29" compared two different quantities.**
+The analyzer counted damaged *samples*. Counting episodes - a contiguous run of
+damaged samples - the like-for-like figure is **0.56 -> 0.93**, a 1.7x
+improvement rather than 3.3x. The larger number is finer sampling counting the
+same episode repeatedly, which is a real gain but not the gain the figure
+appeared to claim.
+
+This matters beyond presentation. Amendment 4's precondition says "damage
+spikes per kill", meaning episodes. Scored correctly it is **0.93 and FAILS**;
+it only passed under the damaged-samples reading. **Both preconditions fail, not
+one**, which makes the void call stronger, not weaker. The analyzer now reports
+episodes as the precondition, damaged samples alongside as explicitly not the
+precondition, and the episode-length distribution.
+
+**2. "#9's episodes never spanned two consecutive samples" was false.**
+Stated in Amendment 2, in the commit message and in the PR. Measured across #9's
+15 archived runs: **25 episodes over 31 damaged samples, longest 5 consecutive**.
+The claim came from the two-run spot check that opened this work - one short-gap
+and one long-gap run showing 1 and 2 isolated samples - generalised to fifteen.
+Struck in place above rather than quietly rewritten, per `GIT_WORKFLOW.md`.
+
+Amendment 2 survives both corrections: the probe did get 3x cheaper, episodes
+per kill did improve 1.7x, samples per episode did roughly double. What was
+wrong is the size of the claimed improvement and the baseline it was measured
+against.
+
+Worth recording plainly, since this branch exists to correct #9's overstatements:
+that is **six overstatements this session, every one toward a tidier result**,
+and this pair appeared inside the correction of the previous pair. Both times the
+only thing that caught it was recomputing from raw per-run data rather than
+reading the prose. The pattern is not a series of slips; it is the default
+direction of error when writing up one's own work, and re-derivation from raw
+data is the only control that has actually worked.
