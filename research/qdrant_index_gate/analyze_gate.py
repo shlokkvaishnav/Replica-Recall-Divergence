@@ -113,8 +113,7 @@ def analyze_run(d: str) -> dict | None:
         return out
     tele = list(csv.DictReader(open(tele_p)))
     samples = min_fraction_per_sample(tele)
-    end = float(meta.get("duration_s", 0)) + float(meta.get("warmup_s", 0)) + \
-        float(g.get("elapsed_s") or 0) + 1e6  # open-ended upper bound
+    end = float("inf")   # window runs to the last telemetry sample
     t0 = float(g.get("gate_closed_rel") or meta.get("warmup_s") or 0)
     cs, ce = meta.get("chaos_start_rel"), meta.get("chaos_stop_rel")
     # SPEC.md Amendment 1: the gate bar is 1 - tol (0.95 in the sweep), not

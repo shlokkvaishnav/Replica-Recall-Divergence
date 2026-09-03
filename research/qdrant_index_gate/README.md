@@ -4,7 +4,7 @@ Issue #28 · branch `method/qdrant-index-gate` · instrument for README open que
 
 **Question.** Can the harness guarantee the corpus is HNSW-indexed on every replica *before* the baseline clock starts, and keep it indexed through the window, so `index_recall` measures a graph rather than an exact scan (`../qdrant_optimizer_masking/`)?
 
-**Answer, in one line.** Only by lowering Qdrant's `indexing_threshold` to 1,000 KB; at the default (20,000 KB) and at 5,000 KB every replica plateaus at 85–93% indexed and stays there. Even at 1,000 KB the window is *mostly* indexed (0.87–0.98, around 0.93), not ≥95%. Restarts under chaos recover in 5–17s. Full results, interpretation, and the three dated amendments: [`SPEC.md`](SPEC.md).
+**Answer, in one line.** Only by lowering Qdrant's `indexing_threshold` to 1,000 KB; at the default (20,000 KB) and at 5,000 KB every replica plateaus at 85–93% indexed and stays there. Even at 1,000 KB the window is *mostly* indexed (0.87–0.98, around 0.93), not ≥95%. In the one chaos run, restarts recovered in 5–17s. Full results, interpretation, and the three dated amendments: [`SPEC.md`](SPEC.md).
 
 ## What was built
 
@@ -24,7 +24,7 @@ Here:
 
 ## Why the tail exists
 
-`default_segment_number` auto → two segments per shard, one of them appendable. Everything written since the last merge lives there, un-indexed until *that segment alone* exceeds `indexing_threshold`, and it is never merged because the segment count is already at target. So the un-indexed fraction is write-phase-sized, not fixed — it does not shrink with a bigger corpus — and only a threshold small enough for the appendable segment to cross it on its own does anything. Separately, `hnsw_config.full_scan_threshold` is 10,000 KB: that segment is exact-scanned even once indexed. Both are `results/OBSERVATION_during_sweep.md`.
+`default_segment_number` auto → two segments per shard, one of them appendable. Everything written since the last merge lives there, un-indexed until *that segment alone* exceeds `indexing_threshold`. Why it is not merged into the indexed segment was not observed directly, but is consistent with Qdrant's documented merge optimizer, which acts only when the segment count exceeds its target. So the un-indexed fraction is write-phase-sized, not fixed — it does not shrink with a bigger corpus — and only a threshold small enough for the appendable segment to cross it on its own does anything. `results/OBSERVATION_during_sweep.md` has the raw read. (An earlier draft also claimed `full_scan_threshold` forces exact scan of that segment; that parameter governs payload-filtered search only and the claim was withdrawn in review.)
 
 ## Reproducing
 

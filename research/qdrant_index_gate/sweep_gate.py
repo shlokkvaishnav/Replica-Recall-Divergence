@@ -3,10 +3,11 @@
 Sweep driver for the indexing-gate pilot (issue #28).
 
 SPEC.md's design: {default, 5000, 1000} KB indexing threshold x {100k, 200k}
-vectors, 2 --no-chaos runs per cell, plus 1 chaos run at (default, 200k) to
-check outcome (iii). 13 runs; SPEC.md says 15 because it counted the chaos
-run per threshold -- one is enough to answer (iii) and the other two would
-only matter if (iii) fails, which is recorded as an amendment in SPEC.md.
+vectors, 2 --no-chaos runs per cell, plus chaos runs to check outcome (iii):
+the pre-registered one at (default, 200k), which cannot close its gate and
+is kept as evidence, and the Amendment 3 one at (1000, 200k), which can.
+14 runs. SPEC.md's original text said 15 because it counted a chaos run per
+threshold; the amendments record why the count moved.
 
 Guards, inherited from ../cross_system_replication/qdrant_sweep.py because
 #24 was bitten by not using them: every run gets its own --out-dir (so a

@@ -4,12 +4,12 @@
 
 - `optimizer_config.indexing_threshold: 5000` -- the flag reached Qdrant.
 - `optimizer_config.default_segment_number: 0` (auto); `segments_count: 4` per node over 2 shards = 2 segments per shard.
-- `hnsw_config.full_scan_threshold: 10000` (KB) -- segments under 10 MB are searched by exact scan even when they carry an HNSW index.
+- `hnsw_config.full_scan_threshold: 10000` (KB). [Corrected in review round 1: this governs payload-filtered search planning only, per Qdrant's indexing docs; it says nothing about how an unfiltered search over the tail segment is served.]
 - `/cluster`: local shards 52,743 + 47,545 points.
 
-Un-indexed per node ~14.5k vectors ~ 7.3k per shard ~ 3.7 MB: one appendable segment per shard, below the 5 MB threshold, and not merged because the segment count is already at target. The tail is therefore "everything written since the last merge" -- proportional to the write phase, not a fixed size, and insensitive to `indexing_threshold` until the appendable segment itself exceeds it. Prediction, written before the 1000 KB cells ran: at 1000 KB the 3.7 MB tail indexes in place and the gate closes (smoke run 3 at 1000 KB closed at 0.993).
+Un-indexed per node ~14.5k vectors ~ 7.3k per shard ~ 3.7 MB: one appendable segment per shard, below the 5 MB threshold, and -- an inference consistent with the documented merge optimizer, not an observation -- not merged because the segment count is already at target. The tail is therefore "everything written since the last merge" -- proportional to the write phase, not a fixed size, and insensitive to `indexing_threshold` until the appendable segment itself exceeds it. Prediction, written before the 1000 KB cells ran: at 1000 KB the 3.7 MB tail indexes in place and the gate closes (smoke run 3 at 1000 KB closed at 0.993).
 
-For `index_recall`, `full_scan_threshold` matters more than the gate: at these corpus sizes the tail segment is always exact-scanned.
+[Withdrawn in review round 1: an earlier version of this note claimed `full_scan_threshold` made the tail segment exact-scanned regardless of the gate. It does not apply to unfiltered search.]
 
 ## Cell 7, thr5000_n200k seed 20260976 -- the first closed gate (recorded 2026-09-04, before the 1000 KB cells ran)
 
