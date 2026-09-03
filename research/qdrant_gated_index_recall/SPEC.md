@@ -3,7 +3,7 @@
 **Branch:** `experiment/qdrant-gated-index-recall` (stacked on `method/qdrant-index-gate`, PR #29, until that merges)
 **Issue:** #30 (body copied verbatim below, per `AGENT_PIPELINE.md`)
 **Date opened:** 2026-09-04
-**Status:** IN PROGRESS
+**Status:** COMPLETE
 
 ### Type
 
@@ -81,3 +81,51 @@ Run 0 (`results/run0_before_after/`, seed 20260999, 100,320 confirmed writes at 
 **Also noted for the Interpretation:** 0.991–1.000 leaves ~1% of headroom for chaos to reduce. Outcome (c) is the likeliest; the Interpretation plan for (c) stands (a harder query workload is a `method/*` issue, not more seeds).
 
 No metric, baseline, or outcome definition changes; run 0 is re-run as `results/run0/` with the new flag behaviour, and its first output is kept as `results/run0_before_after/`.
+
+---
+
+## Results
+
+Fifteen runs, `results/seed<N>_<condition>/` (qdrant_sweep.py's layout), seeds 20261000–20261004, plus `results/run0/` (Amendment 1) and `results/run0_before_after/` (the uninformative first attempt, kept). Every gate closed (2–22s) at 100,000–100,672 confirmed writes on a 1,000 KB threshold. `analyze_gated.py` regenerates every number below into `results/analysis_output.txt`; `../replica_recall/aggregate.py`, unmodified, into `results/aggregate_output.txt`.
+
+**Run 0 (instrument):** on one post-gate state, `SearchParams.exact` scored **1.000 on all six replicas**; the default HNSW path scored **0.996–0.999 on all six**. The graph is traversed; `indexed_vectors_count` means what the gate assumes.
+
+**Primary, pre-registered — worst replica per round, conditioned on that replica ≥0.95 indexed:**
+
+| seed | baseline | chaos | retained (base / chaos) |
+|---|---|---|---|
+| 20261000 | 0.9906 | 0.9875 | 0.92 / 1.00 |
+| 20261001 | 0.9918 | **0.9624** | 0.77 / 1.00 |
+| 20261002 | 0.9913 | 0.9810 | 1.00 / 1.00 |
+| 20261003 | 0.9900 | 0.9783 | 0.55 / 1.00 |
+| 20261004 | 0.9875 | 0.9825 | 0.73 / 1.00 |
+
+Baseline mean 0.9903 vs chaos 0.9783; every chaos seed below every baseline seed; exact two-sided Mann–Whitney **U = 25, p = 0.0079** — the floor at 5 vs 5. Unconditioned (what PR #6 would have computed with an indexed corpus): 0.9896 vs 0.9773, p = 0.0159. Strict (round kept only if every replica ≥ bar): 0.9896 vs 0.9779, p = 0.0556 — fewer rounds survive (1–12 per baseline run), not a different direction.
+
+**Retained fraction** is 1.00 in every chaos run and 0.55–1.00 in baseline: chaos windows are *more* indexed than baselines, because each restart reloads a node whose appendable tail then re-indexes within seconds (#29), whereas a baseline's tail regrows untouched. The conditioned drop is therefore not the exact-scan tail; if anything the tail works against it.
+
+**Where the drop is.** In 4 of 5 chaos runs the worst replica in *every* chaos-window round is a node that had been killed (100%; 0.77 in seed 20261002); in baseline runs the worst node rotates (e.g. `020100010111`). Per-replica chaos-window means show one replica carrying the loss while its peers do not: seed 20261001 `shard-0-2` 0.939 vs 0.986–0.997; seed 20261004 `shard-0-2` 0.973 vs 0.987–0.993; seed 20261002 `shard-0-0` 0.982 vs 0.990–0.996. Lowest single round: 0.845 (seed 20261001).
+
+**Cluster-wide mean, for contrast:** `aggregate.py` averages `index_recall` over all six replicas and all samples and reports baseline 0.9924 ± 0.0013 vs chaos 0.9904 ± 0.0028, **p = 0.31 — no separation.** `completeness` (1.000 vs 0.993) and `e2e_recall` (0.996 vs 0.987) separate at p = 0.0079, as in PR #6.
+
+**Quiesce (secondary):** post-chaos worst-replica mean `index_recall` 0.949, 0.991, 0.974, 0.986, 0.989 (n = 4–5 samples each) against a baseline range of 0.9875–0.9918: two of five stay below the baseline range after kills stop, one (seed 20261000, all four kills on node 2) at 0.949 with a minimum of 0.936.
+
+## Interpretation
+
+**Outcome (a).** Node-kill chaos measurably degrades Qdrant's replica-level `index_recall` when the corpus is HNSW-indexed and the measurement conditions on the replica being indexed: complete separation at the pre-registered floor, on the pre-registered metric, with the loss on the killed replica.
+
+**Why PR #6 saw nothing, in two parts.** First, #6's corpus was not indexed (`../qdrant_optimizer_masking/`), so it measured exact scans — the correction already on record. Second, and new: even on an indexed corpus, the *cluster-wide mean* does not separate (p = 0.31 here). The effect is on one replica out of six, and averaging over six replicas dilutes a 1–5 point drop on one into a 0.2 point drop on the mean. This is the same shape as `DECISION_LOG`'s reason for scoring `loo_agreement` per replica rather than in aggregate, and it means the nano-db comparison has to be read at the same unit: `../replica_recall/RESULTS.md`'s `index_recall` separation is also a per-replica statement.
+
+**Size, honestly.** The effect is ~1.2 points on the seed mean (0.990 → 0.978) and up to 5 points on the worst replica in one seed. `index_recall` at k = 10 over 100k SIFT vectors has ~1% of headroom below 1.0 — outcome (c)'s worry — so the separation is at the limit of what the metric can resolve, and it reached the floor anyway. A harder query workload (README open question #5) would enlarge the scale, not change the sign; that stays a `method/*` question.
+
+**Mechanism, not established.** What a kill does to a persisted HNSW is not observed here. The candidates — WAL-replayed points landing in a fresh appendable segment whose links differ from the pre-kill graph; a reloaded index whose entry points differ; or plain missing points (the completeness loss) making the local ground truth easier and the graph relatively worse — are distinguishable only with per-segment instrumentation this harness does not have. The quiesce runs say the loss does not always heal within 50s, which is the shape of the nano-db result, but at n = 5 with 4–5 post-chaos samples each that is a hypothesis for a pre-registered healing experiment, not a finding.
+
+**What this does not establish.** Anything about Weaviate or systems with real anti-entropy. That the effect scales with kill count or spacing (kill timing was randomized to stay matched to #6; #9/#24's line is closed). That the strict metric would reach the floor with more baseline rounds (p = 0.056 with 1–12 retained rounds). Single host, single image digest, 100k corpus, k = 10.
+
+## Decision
+
+**MERGE.** All nine criteria: relevance (README priority #1, step 2, the question named since the withdrawal); correctness (run 0's exact = 1.000 / HNSW < 1.000 contrast; every number recomputable by two independent tools, one of them unmodified from the nano-db experiment); validity (pre-registered metric, new seeds, matched protocol, conditioning on the instrument state); reproducibility (`sweep.py run0`, `sweep.py sweep`, `analyze_gated.py`); documentation (this spec, one amendment dated before the sweep); interpretation (the aggregate-mean null is reported next to the per-replica separation, not instead of it); integrity (run 0's first attempt kept as uninformative; the strict metric's p = 0.056 reported); integration (`search_batch(exact=)` default off, one new directory); evidence (15 runs at the pre-registered N).
+
+**Changes the top-level README:** open question #1's graph-quality axis moves from "untested, not null" to **established on Qdrant at the replica level** — with the unit stated, because at the cluster level it is a null. The cross-system claim becomes: replica-level `index_recall` divergence under node-kill chaos is not specific to nano-db; the cluster-wide mean hides it on both systems' scale of effect. `DECISION_LOG` entry required.
+
+**Follow-ons, each its own issue:** (1) `experiment/*` — does the per-replica `index_recall` loss heal on Qdrant, with a quiesce window long enough to say (the 50s here is a hint); (2) `method/*` — a harder query workload to enlarge the metric's headroom (open question #5); (3) Weaviate, per the Motivation.
