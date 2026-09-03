@@ -1,0 +1,36 @@
+[sift] cached  sift_base.fvecs (181 MB)
+[sift] cached  sift_query.fvecs (5 MB)
+[qrr] bringing up 3-node Qdrant cluster (2x3, image=qdrant/qdrant@sha256:057ee3a8da769fe7310dd3537b4dc7583bf87a95ce8ac43c0af5a46bc580d1fc)...
+[qrr] cluster ready, collection created, shards Active
+[qrr] warmup 40s (writing, no faults)...
+[qrr] warmup extended: 58464/200000 written at t=40s
+[qrr] warmup extended: 67392/200000 written at t=50s
+[qrr] warmup extended: 76512/200000 written at t=60s
+[qrr] warmup extended: 84704/200000 written at t=70s
+[qrr] warmup extended: 93248/200000 written at t=80s
+[qrr] warmup extended: 100608/200000 written at t=90s
+[qrr] warmup extended: 103872/200000 written at t=100s
+[qrr] warmup extended: 108000/200000 written at t=110s
+[qrr] warmup extended: 110592/200000 written at t=120s
+[qrr] warmup extended: 112960/200000 written at t=130s
+[qrr] warmup extended: 122176/200000 written at t=140s
+[qrr] warmup extended: 134976/200000 written at t=150s
+[qrr] warmup extended: 144736/200000 written at t=160s
+[qrr] warmup extended: 155968/200000 written at t=170s
+[qrr] warmup extended: 165856/200000 written at t=180s
+[qrr] warmup extended: 173792/200000 written at t=190s
+[qrr] warmup extended: 180096/200000 written at t=200s
+[qrr] warmup extended: 190304/200000 written at t=210s
+[qrr] warmup extended: 197088/200000 written at t=220s
+[qrr] warmup reached 200224 confirmed writes at t=228.4s
+[qrr] index gate: writers paused, waiting for every replica indexed >= 0.9500 (3 consecutive polls, timeout 600s)...
+[qrr] [gate]    11s  min indexed fraction 0.9713  (node 0 status='yellow')
+[qrr] [gate] closed after 16.8s: every replica indexed >= 0.9500 for 3 consecutive polls
+[qrr] index gate closed at t=245.2s; writers resumed
+[qrr] phase 1/3: 30s settling, no faults...
+[qrr] phase 2/3: 60s chaos...
+[qrr] phase 3/3: 30s quiesce -- faults stopped, watching for recovery...
+[qrr] 72 samples, 4 chaos events, 261152 vectors confirmed
+[qrr] wrote C:\Users\shlok\OneDrive\Documents\Projects\Replica-Recall-Divergence\research\qdrant_index_gate\results\thr1000_n200k_chaos_seed20260983\samples.csv
+
+[qrr] teardown...

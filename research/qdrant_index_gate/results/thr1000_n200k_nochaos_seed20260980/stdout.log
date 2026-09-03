@@ -1,0 +1,33 @@
+[sift] cached  sift_base.fvecs (181 MB)
+[sift] cached  sift_query.fvecs (5 MB)
+[qrr] bringing up 3-node Qdrant cluster (2x3, image=qdrant/qdrant@sha256:057ee3a8da769fe7310dd3537b4dc7583bf87a95ce8ac43c0af5a46bc580d1fc)...
+[qrr] cluster ready, collection created, shards Active
+[qrr] warmup 40s (writing, no faults)...
+[qrr] warmup extended: 56928/200000 written at t=40s
+[qrr] warmup extended: 62912/200000 written at t=50s
+[qrr] warmup extended: 67712/200000 written at t=60s
+[qrr] warmup extended: 71520/200000 written at t=70s
+[qrr] warmup extended: 75616/200000 written at t=80s
+[qrr] warmup extended: 87744/200000 written at t=90s
+[qrr] warmup extended: 100704/200000 written at t=100s
+[qrr] warmup extended: 110624/200000 written at t=110s
+[qrr] warmup extended: 121760/200000 written at t=120s
+[qrr] warmup extended: 131712/200000 written at t=130s
+[qrr] warmup extended: 141056/200000 written at t=140s
+[qrr] warmup extended: 150080/200000 written at t=150s
+[qrr] warmup extended: 160000/200000 written at t=160s
+[qrr] warmup extended: 167584/200000 written at t=170s
+[qrr] warmup extended: 175072/200000 written at t=180s
+[qrr] warmup extended: 185664/200000 written at t=190s
+[qrr] warmup extended: 194624/200000 written at t=200s
+[qrr] warmup reached 200192 confirmed writes at t=207.9s
+[qrr] index gate: writers paused, waiting for every replica indexed >= 0.9500 (3 consecutive polls, timeout 600s)...
+[qrr] [gate]    10s  min indexed fraction 0.9447  (node 0 status='yellow')
+[qrr] [gate]    21s  min indexed fraction 1.0000  (node 2 status='yellow')
+[qrr] [gate] closed after 21.6s: every replica indexed >= 0.9500 for 3 consecutive polls
+[qrr] index gate closed at t=229.5s; writers resumed
+[qrr] baseline (no chaos), running 120s...
+[qrr] 66 samples, 0 chaos events, 271104 vectors confirmed
+[qrr] wrote C:\Users\shlok\OneDrive\Documents\Projects\Replica-Recall-Divergence\research\qdrant_index_gate\results\thr1000_n200k_nochaos_seed20260980\samples.csv
+
+[qrr] teardown...

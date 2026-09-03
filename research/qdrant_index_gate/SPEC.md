@@ -3,7 +3,7 @@
 **Branch:** `method/qdrant-index-gate`
 **Issue:** #28 (body copied verbatim below, per `AGENT_PIPELINE.md`)
 **Date opened:** 2026-09-03
-**Status:** IN PROGRESS
+**Status:** COMPLETE
 
 ### Type
 
@@ -111,3 +111,41 @@ The pre-registered design put the single chaos run at the default threshold. The
 **Change:** one additional chaos cell at 1,000 KB × 200k, seed 20260983, same `--chaos-duration 60 --pre-chaos-s 30`. It is the only cell that can answer (iii) — whether a restart drops a replica back below the bar for longer than the kill itself — and its `reindex_s` is computed by the analysis already committed. Nothing else changes; the 14-cell sweep replaces the 13-cell one in the Results.
 
 **Also recorded here, not as a change:** the mechanism behind the plateaus, read from the live collection during cell 5 (`results/OBSERVATION_during_sweep.md`): `default_segment_number: 0` gives two segments per shard, one of which is the appendable segment; its contents are un-indexed until it alone exceeds `indexing_threshold`, and it is not merged because the segment count is already at target. Amendment 1 called the tail "fixed-size"; it is *write-phase-sized*, which is why it did not shrink at 200k. `hnsw_config.full_scan_threshold: 10000` KB additionally means that segment is exact-scanned even once indexed.
+
+---
+
+## Results
+
+Fourteen cells (`results/`, one directory each; `analyze_gate.py` regenerates every number below into `results/analysis_output.txt`). Corpus at gate = `written_at_gate`, 100,1xx or 200,1xx in every cell. Gate: `tol 0.05`, 3 consecutive 1s polls, 600s cap.
+
+| threshold | cells | gates closed | close time | plateau if failed | baseline ≥0.95 (per run) | min fraction in run |
+|---|---|---|---|---|---|---|
+| default (20,000 KB) | 5 (incl. chaos) | **0/5** | — | 0.855, 0.859, 0.875, 0.878, 0.916 | — | — |
+| 5,000 KB | 4 | **1/4** | 13.6s | 0.846, 0.852, 0.930 | 0.04 (the one that closed: 0.966 → 0.80 by end of window) | 0.80 |
+| 1,000 KB | 5 (incl. chaos) | **5/5** | 4.3–22.1s | — | 100k: 0.42, 0.08 · 200k: 0.62, 0.38 · chaos cell: 1.00 (6/6) | 0.873–0.936 |
+
+Chaos cell, 1,000 KB × 200k (seed 20260983): 4 kills from the randomized chaos loop at t = 279, 298, 309, 322s (node 2, node 0, node 0, node 2; down for 8.0, 2.7, 3.5, 5.4s); chaos-window samples ≥0.95: **10/11**; time from restart back to ≥0.95: **6.7, 16.9, 4.7, 6.5s**.
+
+`probe_s` median: 1.2–1.9s at 100k, 2.5–3.0s at 200k (1,000 KB), 3.6s at 200k (5,000 KB). Setup cost: extended warmup ≈25s (100k) / ≈85s (200k) plus the gate.
+
+The pre-registered default-threshold chaos cell timed out at its gate (plateau 0.859), as Amendment 3 predicted; kept as `thrdefault_n200k_chaos_seed20260982`.
+
+## Interpretation
+
+**Outcome (b), sharpened.** A front-loaded corpus reaches the bar only when `indexing_threshold` is lowered to 1,000 KB. At the default and at 5,000 KB, every replica plateaus at 0.85–0.93 and stays there for as long as the gate waits: the appendable segment (one per shard, `default_segment_number` auto = 2/shard) holds everything written since the last merge, is never merged because the segment count is already at target, and is indexed only when *it alone* crosses the threshold. That tail is write-phase-sized, not fixed — which is why it did not shrink at 200k — and why 5,000 KB is not meaningfully different from 20,000 KB at these sizes (`results/OBSERVATION_during_sweep.md`).
+
+**Null hypothesis (ii) holds in a weaker form than feared.** Once writers resume, the tail regrows: at 5,000 KB the one closed gate fell from 0.966 to 0.80 within 120s; at 1,000 KB the optimizer keeps up well enough that the window oscillates 0.87–0.98 around ~0.93, with ≥0.95 satisfied in 8–62% of samples. So "indexed" during measurement means *mostly* indexed — a 5–13% exact-scanned tail is the steady state at this write rate, not a transient.
+
+**Null hypothesis (iii) is refuted at 1,000 KB.** Restarts drop a replica below the bar for 5–17s, the same order as the 3–8s down-times plus Qdrant's ~3.3s restart latency (#19), and the chaos window stays ≥0.95 in 10/11 samples. The gate is not a pre-chaos-only property.
+
+**Outcome (d) is partly present.** `probe_s` at 200k is 2.5–3.6s, the same `ListLocalIds`-dominated floor PR #25 found; an indexed corpus does not change it. Any follow-on at 200k inherits #25's sampling limit.
+
+**What this does not establish.** Anything about `index_recall` under chaos — no comparison was run, and the cells' `index_recall` values were not analysed beyond noting the chaos cell's median (0.99). Whether a 93%-indexed corpus makes `index_recall` "measure a graph" is not answered by `indexed_vectors_count` alone: `hnsw_config.full_scan_threshold` is 10,000 KB, so the appendable segment is exact-scanned even after it is indexed. The spot-check the Confounds section asked for (index_recall before vs after the gate on one node) was not done and is listed under Decision. Single host, single image digest, 2 repeats per cell: timings are ranges, not distributions.
+
+## Decision
+
+**MERGE the method; the instrument is validated infrastructure by the `graph_forensics.py` standard.** `--index-gate` refused eight un-indexed corpora loudly (exit 3, no `samples.csv`, `index_gate_failed.json`), closed six, and every closed gate is verifiable from `run_meta.json`; `--warmup-until-written` turned "corpus size" from a label into a measured quantity after the first cell showed the label was wrong; `--indexing-threshold-kb` reaches Qdrant and the effect is large and monotone. Three amendments were needed and each is dated before the cells it governs.
+
+**Follow-on, as its own pre-registered `experiment/*` (README priority #1, step 2):** re-run PR #6's 5-seed sweep with `--index-gate --index-gate-tol 0.05 --indexing-threshold-kb 1000 --warmup-until-written 200000 --capture-telemetry`, reporting `index_recall` *alongside* per-sample indexed fraction so every sample states what it was measuring. Before that, two small method items: (1) the before/after-gate `index_recall` spot-check this spec owed; (2) expose `hnsw_config.full_scan_threshold` at collection creation, since at 10,000 KB the tail segment is exact-scanned regardless of the gate — without that, "indexed" and "searched by the graph" remain different statements.
+
+**Not proposed:** a lower tolerance, a longer gate, or a bigger corpus. The plateau mechanism makes all three return the same answer.

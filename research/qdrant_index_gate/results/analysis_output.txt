@@ -1,0 +1,20 @@
+run	threshold_kb	sift_vectors	chaos	gated	gate_closed	gate_close_s	gate_fail_mode	gate_bar	base_frac_0p95	base_frac_1p0	base_n	chaos_frac_0p95	chaos_n	min_frac_overall	probe_s_median	reindex_s
+thr1000_n100k_nochaos_seed20260978	1000	250000	False	True	True	4.251		0.95	0.4166666666666667	0.0	24		0	0.8728687693199382	1.181	
+thr1000_n100k_nochaos_seed20260979	1000	250000	False	True	True	15.485		0.95	0.08333333333333333	0.0	24		0	0.9143983384902301	1.925	
+thr1000_n200k_chaos_seed20260983	1000	350000	True	True	True	16.788		0.95	1.0	0.0	6	0.9090909090909091	11	0.9291721065970355	2.461	[6.7, 16.9, 4.7, 6.5]
+thr1000_n200k_nochaos_seed20260980	1000	350000	False	True	True	21.605		0.95	0.625	0.041666666666666664	24		0	0.9364826413514368	2.961	
+thr1000_n200k_nochaos_seed20260981	1000	350000	False	True	True	22.113		0.95	0.375	0.0	24		0	0.9280833973374296	2.871	
+thr5000_n100k_nochaos_seed20260974	5000		True	True	False		plateau@0.8519							0.851867		
+thr5000_n100k_nochaos_seed20260975	5000		True	True	False		plateau@0.8463							0.84631		
+thr5000_n200k_nochaos_seed20260976	5000	350000	False	True	True	13.576		0.95	0.041666666666666664	0.0	24		0	0.8044541453719477	3.611	
+thr5000_n200k_nochaos_seed20260977	5000		True	True	False		plateau@0.9304							0.930388		
+thrdefault_n100k_nochaos_seed20260970			True	True	False		plateau@0.9164							0.916394		
+thrdefault_n100k_nochaos_seed20260971			True	True	False		plateau@0.8749							0.874861		
+thrdefault_n200k_chaos_seed20260982			True	True	False		plateau@0.8590							0.858985		
+thrdefault_n200k_nochaos_seed20260972			True	True	False		plateau@0.8547							0.854681		
+thrdefault_n200k_nochaos_seed20260973			True	True	False		plateau@0.8777							0.877697		
+
+14 runs, 14 gated, 6 gates closed
+  threshold    1000: 5/5 closed, close_s range 4.251-22.113, baseline@bar range 0.08333333333333333-1.0, chaos@0.95 range 0.9090909090909091-0.9090909090909091
+  threshold    5000: 1/4 closed (fail: plateau@0.8463, plateau@0.8519, plateau@0.9304), close_s range 13.576-13.576, baseline@bar range 0.041666666666666664-0.041666666666666664, chaos@0.95 range None-None
+  threshold    None: 0/5 closed (fail: plateau@0.8547, plateau@0.8590, plateau@0.8749, plateau@0.8777, plateau@0.9164), close_s range None-None, baseline@bar range None-None, chaos@0.95 range None-None

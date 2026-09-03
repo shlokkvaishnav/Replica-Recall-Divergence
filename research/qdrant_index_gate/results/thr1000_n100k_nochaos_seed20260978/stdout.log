@@ -1,0 +1,19 @@
+[sift] cached  sift_base.fvecs (181 MB)
+[sift] cached  sift_query.fvecs (5 MB)
+[qrr] bringing up 3-node Qdrant cluster (2x3, image=qdrant/qdrant@sha256:057ee3a8da769fe7310dd3537b4dc7583bf87a95ce8ac43c0af5a46bc580d1fc)...
+[qrr] cluster ready, collection created, shards Active
+[qrr] warmup 40s (writing, no faults)...
+[qrr] warmup extended: 60000/100000 written at t=40s
+[qrr] warmup extended: 68736/100000 written at t=50s
+[qrr] warmup extended: 77920/100000 written at t=60s
+[qrr] warmup extended: 85696/100000 written at t=70s
+[qrr] warmup extended: 94208/100000 written at t=80s
+[qrr] warmup reached 100160 confirmed writes at t=88.6s
+[qrr] index gate: writers paused, waiting for every replica indexed >= 0.9500 (3 consecutive polls, timeout 600s)...
+[qrr] [gate] closed after 4.2s: every replica indexed >= 0.9500 for 3 consecutive polls
+[qrr] index gate closed at t=92.8s; writers resumed
+[qrr] baseline (no chaos), running 120s...
+[qrr] 90 samples, 0 chaos events, 173120 vectors confirmed
+[qrr] wrote C:\Users\shlok\OneDrive\Documents\Projects\Replica-Recall-Divergence\research\qdrant_index_gate\results\thr1000_n100k_nochaos_seed20260978\samples.csv
+
+[qrr] teardown...

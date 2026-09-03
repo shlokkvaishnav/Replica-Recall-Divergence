@@ -1,0 +1,84 @@
+[sift] cached  sift_base.fvecs (181 MB)
+[sift] cached  sift_query.fvecs (5 MB)
+[qrr] bringing up 3-node Qdrant cluster (2x3, image=qdrant/qdrant@sha256:057ee3a8da769fe7310dd3537b4dc7583bf87a95ce8ac43c0af5a46bc580d1fc)...
+[qrr] cluster ready, collection created, shards Active
+[qrr] warmup 40s (writing, no faults)...
+[qrr] warmup extended: 88384/200000 written at t=40s
+[qrr] warmup extended: 98656/200000 written at t=50s
+[qrr] warmup extended: 105792/200000 written at t=60s
+[qrr] warmup extended: 113952/200000 written at t=70s
+[qrr] warmup extended: 121952/200000 written at t=80s
+[qrr] warmup extended: 128608/200000 written at t=90s
+[qrr] warmup extended: 135232/200000 written at t=100s
+[qrr] warmup extended: 142208/200000 written at t=110s
+[qrr] warmup extended: 148864/200000 written at t=120s
+[qrr] warmup extended: 155616/200000 written at t=130s
+[qrr] warmup extended: 164768/200000 written at t=140s
+[qrr] warmup extended: 176384/200000 written at t=150s
+[qrr] warmup extended: 184160/200000 written at t=160s
+[qrr] warmup extended: 192864/200000 written at t=170s
+[qrr] warmup reached 200032 confirmed writes at t=178.8s
+[qrr] index gate: writers paused, waiting for every replica indexed >= 0.9500 (3 consecutive polls, timeout 600s)...
+[qrr] [gate]    10s  min indexed fraction 0.8352  (node 0 status='yellow')
+[qrr] [gate]    21s  min indexed fraction 0.8590  (node 0 indexed 0.9355 < 0.9500 (187225/200128))
+[qrr] [gate]    31s  min indexed fraction 0.8590  (node 0 indexed 0.9355 < 0.9500 (187225/200128))
+[qrr] [gate]    41s  min indexed fraction 0.8590  (node 0 indexed 0.9355 < 0.9500 (187225/200128))
+[qrr] [gate]    51s  min indexed fraction 0.8590  (node 0 indexed 0.9355 < 0.9500 (187225/200128))
+[qrr] [gate]    61s  min indexed fraction 0.8590  (node 0 indexed 0.9355 < 0.9500 (187225/200128))
+[qrr] [gate]    71s  min indexed fraction 0.8590  (node 0 indexed 0.9355 < 0.9500 (187225/200128))
+[qrr] [gate]    81s  min indexed fraction 0.8590  (node 0 indexed 0.9355 < 0.9500 (187225/200128))
+[qrr] [gate]    91s  min indexed fraction 0.8590  (node 0 indexed 0.9355 < 0.9500 (187225/200128))
+[qrr] [gate]   102s  min indexed fraction 0.8590  (node 0 indexed 0.9355 < 0.9500 (187225/200128))
+[qrr] [gate]   112s  min indexed fraction 0.8590  (node 0 indexed 0.9355 < 0.9500 (187225/200128))
+[qrr] [gate]   122s  min indexed fraction 0.8590  (node 0 indexed 0.9355 < 0.9500 (187225/200128))
+[qrr] [gate]   132s  min indexed fraction 0.8590  (node 0 indexed 0.9355 < 0.9500 (187225/200128))
+[qrr] [gate]   142s  min indexed fraction 0.8590  (node 0 indexed 0.9355 < 0.9500 (187225/200128))
+[qrr] [gate]   152s  min indexed fraction 0.8590  (node 0 indexed 0.9355 < 0.9500 (187225/200128))
+[qrr] [gate]   162s  min indexed fraction 0.8590  (node 0 indexed 0.9355 < 0.9500 (187225/200128))
+[qrr] [gate]   172s  min indexed fraction 0.8590  (node 0 indexed 0.9355 < 0.9500 (187225/200128))
+[qrr] [gate]   183s  min indexed fraction 0.8590  (node 0 indexed 0.9355 < 0.9500 (187225/200128))
+[qrr] [gate]   193s  min indexed fraction 0.8590  (node 0 indexed 0.9355 < 0.9500 (187225/200128))
+[qrr] [gate]   203s  min indexed fraction 0.8590  (node 0 indexed 0.9355 < 0.9500 (187225/200128))
+[qrr] [gate]   213s  min indexed fraction 0.8590  (node 0 indexed 0.9355 < 0.9500 (187225/200128))
+[qrr] [gate]   223s  min indexed fraction 0.8590  (node 0 indexed 0.9355 < 0.9500 (187225/200128))
+[qrr] [gate]   233s  min indexed fraction 0.8590  (node 0 indexed 0.9355 < 0.9500 (187225/200128))
+[qrr] [gate]   243s  min indexed fraction 0.8590  (node 0 indexed 0.9355 < 0.9500 (187225/200128))
+[qrr] [gate]   254s  min indexed fraction 0.8590  (node 0 indexed 0.9355 < 0.9500 (187225/200128))
+[qrr] [gate]   264s  min indexed fraction 0.8590  (node 0 indexed 0.9355 < 0.9500 (187225/200128))
+[qrr] [gate]   274s  min indexed fraction 0.8590  (node 0 indexed 0.9355 < 0.9500 (187225/200128))
+[qrr] [gate]   284s  min indexed fraction 0.8590  (node 0 indexed 0.9355 < 0.9500 (187225/200128))
+[qrr] [gate]   294s  min indexed fraction 0.8590  (node 0 indexed 0.9355 < 0.9500 (187225/200128))
+[qrr] [gate]   304s  min indexed fraction 0.8590  (node 0 indexed 0.9355 < 0.9500 (187225/200128))
+[qrr] [gate]   314s  min indexed fraction 0.8590  (node 0 indexed 0.9355 < 0.9500 (187225/200128))
+[qrr] [gate]   325s  min indexed fraction 0.8590  (node 0 indexed 0.9355 < 0.9500 (187225/200128))
+[qrr] [gate]   335s  min indexed fraction 0.8590  (node 0 indexed 0.9355 < 0.9500 (187225/200128))
+[qrr] [gate]   345s  min indexed fraction 0.8590  (node 0 indexed 0.9355 < 0.9500 (187225/200128))
+[qrr] [gate]   355s  min indexed fraction 0.8590  (node 0 indexed 0.9355 < 0.9500 (187225/200128))
+[qrr] [gate]   365s  min indexed fraction 0.8590  (node 0 indexed 0.9355 < 0.9500 (187225/200128))
+[qrr] [gate]   375s  min indexed fraction 0.8590  (node 0 indexed 0.9355 < 0.9500 (187225/200128))
+[qrr] [gate]   385s  min indexed fraction 0.8590  (node 0 indexed 0.9355 < 0.9500 (187225/200128))
+[qrr] [gate]   395s  min indexed fraction 0.8590  (node 0 indexed 0.9355 < 0.9500 (187225/200128))
+[qrr] [gate]   406s  min indexed fraction 0.8590  (node 0 indexed 0.9355 < 0.9500 (187225/200128))
+[qrr] [gate]   416s  min indexed fraction 0.8590  (node 0 indexed 0.9355 < 0.9500 (187225/200128))
+[qrr] [gate]   426s  min indexed fraction 0.8590  (node 0 indexed 0.9355 < 0.9500 (187225/200128))
+[qrr] [gate]   436s  min indexed fraction 0.8590  (node 0 indexed 0.9355 < 0.9500 (187225/200128))
+[qrr] [gate]   446s  min indexed fraction 0.8590  (node 0 indexed 0.9355 < 0.9500 (187225/200128))
+[qrr] [gate]   456s  min indexed fraction 0.8590  (node 0 indexed 0.9355 < 0.9500 (187225/200128))
+[qrr] [gate]   466s  min indexed fraction 0.8590  (node 0 indexed 0.9355 < 0.9500 (187225/200128))
+[qrr] [gate]   477s  min indexed fraction 0.8590  (node 0 indexed 0.9355 < 0.9500 (187225/200128))
+[qrr] [gate]   487s  min indexed fraction 0.8590  (node 0 indexed 0.9355 < 0.9500 (187225/200128))
+[qrr] [gate]   497s  min indexed fraction 0.8590  (node 0 indexed 0.9355 < 0.9500 (187225/200128))
+[qrr] [gate]   507s  min indexed fraction 0.8590  (node 0 indexed 0.9355 < 0.9500 (187225/200128))
+[qrr] [gate]   517s  min indexed fraction 0.8590  (node 0 indexed 0.9355 < 0.9500 (187225/200128))
+[qrr] [gate]   527s  min indexed fraction 0.8590  (node 0 indexed 0.9355 < 0.9500 (187225/200128))
+[qrr] [gate]   537s  min indexed fraction 0.8590  (node 0 indexed 0.9355 < 0.9500 (187225/200128))
+[qrr] [gate]   547s  min indexed fraction 0.8590  (node 0 indexed 0.9355 < 0.9500 (187225/200128))
+[qrr] [gate]   558s  min indexed fraction 0.8590  (node 0 indexed 0.9355 < 0.9500 (187225/200128))
+[qrr] [gate]   568s  min indexed fraction 0.8590  (node 0 indexed 0.9355 < 0.9500 (187225/200128))
+[qrr] [gate]   578s  min indexed fraction 0.8590  (node 0 indexed 0.9355 < 0.9500 (187225/200128))
+[qrr] [gate]   588s  min indexed fraction 0.8590  (node 0 indexed 0.9355 < 0.9500 (187225/200128))
+[qrr] [gate]   598s  min indexed fraction 0.8590  (node 0 indexed 0.9355 < 0.9500 (187225/200128))
+[qrr] [gate] NOT closed after 600.1s (timeout 600s): node 0 indexed 0.9355 < 0.9500 (187225/200128)
+[qrr] FATAL: index gate never closed -- refusing to measure an un-indexed corpus. No samples.csv written.
+
+[qrr] teardown...
