@@ -214,3 +214,11 @@ claim was made, it was wrong for a reason worth remembering, and the reason -- a
 metric quietly measuring something other than what it is defined to measure,
 because of a system behavior nobody had instrumented -- is more transferable than
 the correction.
+
+## Addendum: the graph-quality axis, re-measured on an indexed corpus (2026-09-04)
+
+The 2026-09-02 correction above left the graph-quality axis **untested**. It has now been tested, in two steps that live in their own directories: `../qdrant_index_gate/` (issue #28, PR #29) built an indexing gate so a run refuses to start its baseline clock until every replica reports the corpus HNSW-indexed — which turned out to require `indexing_threshold` 1,000 KB, since at Qdrant's default the appendable segment leaves 85–93% of the corpus un-indexed indefinitely — and `../qdrant_gated_index_recall/` (issue #30, PR #31) re-ran this sweep's protocol with the gate on, five new seeds, each sample conditioned on its replica's indexed fraction.
+
+**Result.** Worst-replica `index_recall` under chaos 0.978 vs baseline 0.990, every seed separated, exact Mann–Whitney p = 0.0079; the killed node is the worst replica in 4 of 5 runs; the loss is one replica's (e.g. 0.939 against peers at 0.986–0.997). The cluster-wide six-replica mean does **not** separate (p = 0.31). `completeness` and `e2e_recall` separate as they did here.
+
+**What that does to this spec's reading.** The struck-through sentence in the Interpretation — "the divergence is concentrated in data completeness, not graph quality, unlike nano-db" — was wrong for a *second* reason beyond the un-indexed corpus: it was computed on the cluster mean, which dilutes a one-replica loss to 0.2 points. On an indexed corpus and at the replica level, Qdrant's graph diverges under chaos as nano-db's does. The cross-system claim is therefore: replica-level `index_recall` divergence under node-kill chaos is not specific to nano-db, and the cluster-wide mean hides it. The unit is part of the claim. Mechanism, healing (2 of 5 seeds below baseline 50s after the last kill; 4–5 samples each), and scale remain open; see `../qdrant_gated_index_recall/SPEC.md`.
