@@ -4,22 +4,23 @@ C:\Users\shlok\OneDrive\Documents\Projects\Replica-Recall-Divergence\research\cr
 [qrr] bringing up 3-node Qdrant cluster (2x3, image=qdrant/qdrant@sha256:057ee3a8da769fe7310dd3537b4dc7583bf87a95ce8ac43c0af5a46bc580d1fc)...
 [qrr] cluster ready, collection created, shards Active
 [qrr] warmup 20s (writing, no faults)...
-[qrr] warmup extended: 35456/100000 written at t=20s
-[qrr] warmup extended: 46848/100000 written at t=30s
-[qrr] warmup extended: 57056/100000 written at t=40s
-[qrr] warmup extended: 66400/100000 written at t=50s
-[qrr] warmup extended: 75264/100000 written at t=60s
-[qrr] warmup extended: 84576/100000 written at t=70s
-[qrr] warmup extended: 92640/100000 written at t=80s
-[qrr] warmup reached 100320 confirmed writes at t=90.2s
+[qrr] warmup extended: 35072/100000 written at t=20s
+[qrr] warmup extended: 46304/100000 written at t=30s
+[qrr] warmup extended: 57600/100000 written at t=40s
+[qrr] warmup extended: 67328/100000 written at t=50s
+[qrr] warmup extended: 76800/100000 written at t=60s
+[qrr] warmup extended: 86560/100000 written at t=70s
+[qrr] warmup extended: 92480/100000 written at t=80s
+[qrr] warmup reached 100384 confirmed writes at t=89.7s
 [qrr] index gate: writers paused, waiting for every replica indexed >= 0.9500 (3 consecutive polls, timeout 600s)...
-[qrr] score-at-gate BEFORE: shard-0-0=0.999000, shard-0-1=0.999000, shard-0-2=1.000000, shard-1-0=0.998000, shard-1-1=0.996000, shard-1-2=0.996000
-[qrr] [gate] closed after 2.1s: every replica indexed >= 0.9500 for 3 consecutive polls
-[qrr] score-at-gate AFTER:  shard-0-0=0.999000, shard-0-1=0.999000, shard-0-2=1.000000, shard-1-0=0.998000, shard-1-1=0.996000, shard-1-2=0.996000
+[qrr] score-at-gate BEFORE: shard-0-0=0.999000, shard-0-1=0.999000, shard-0-2=0.998000, shard-1-0=0.996000, shard-1-1=0.998000, shard-1-2=0.999000
+[qrr] [gate] closed after 2.0s: every replica indexed >= 0.9500 for 3 consecutive polls
+[qrr] score-at-gate EXACT:  shard-0-0=1.000000, shard-0-1=1.000000, shard-0-2=1.000000, shard-1-0=1.000000, shard-1-1=1.000000, shard-1-2=1.000000
+[qrr] score-at-gate AFTER:  shard-0-0=0.999000, shard-0-1=0.999000, shard-0-2=0.998000, shard-1-0=0.996000, shard-1-1=0.998000, shard-1-2=0.999000
 [qrr] score-at-gate delta:  shard-0-0=0.0, shard-0-1=0.0, shard-0-2=0.0, shard-1-0=0.0, shard-1-1=0.0, shard-1-2=0.0
-[qrr] index gate closed at t=97.8s; writers resumed
+[qrr] index gate closed at t=97.4s; writers resumed
 [qrr] baseline (no chaos), running 60s...
-[qrr] 42 samples, 0 chaos events, 132992 vectors confirmed
+[qrr] 42 samples, 0 chaos events, 143072 vectors confirmed
 [qrr] wrote C:\Users\shlok\OneDrive\Documents\Projects\Replica-Recall-Divergence\research\qdrant_gated_index_recall\results\run0\samples.csv
 
 [qrr] teardown...
