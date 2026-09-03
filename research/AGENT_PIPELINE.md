@@ -239,8 +239,11 @@ starts:
    skipping the most downstream thing there was. If the claimed issue is
    stale (no branch, no commits, no running process for it), un-assign it
    and relabel `stage:proposed` so query 3 picks it up honestly.
-3. Else, **`gh issue list --label stage:proposed --assignee ""`** returns
-   anything → play **Implementer** on the oldest unclaimed issue.
+3. Else, **`gh issue list --label stage:proposed --json number,assignees -q '.[] | select(.assignees | length == 0) | .number'`** returns
+   anything → play **Implementer** on the oldest unclaimed issue. (An
+   earlier version used `--assignee ""`, which in current `gh` returns
+   nothing rather than "unassigned" — the query silently never fired, found
+   on #30 when the filed issue did not show up.)
 4. Else, **`gh issue list --label stage:proposed`**'s count is below
    threshold N (default N = 3 — enough runway that the implementer role
    never stalls waiting on the researcher role's next tick, small enough
