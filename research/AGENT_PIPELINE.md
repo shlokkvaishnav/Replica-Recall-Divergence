@@ -227,6 +227,16 @@ starts:
    PR and its linked issue back to `stage:in-review`. Revision work is
    downstream of new work in exactly the same sense a review is, so it sits
    above queries 3 and 4, not below them.
+2b. Else, **`gh issue list --label stage:claimed --assignee @me`** returns
+   anything → play **Implementer** on it: that is work this account claimed
+   and has not yet turned into a PR — a sweep still running, a spec whose
+   runs have not started. Continue it; do not file new work on top of it.
+   Added 2026-09-03 when a loop wakeup mid-way through #28's sweep found
+   queries 0–3 empty and would have fired query 4 (Researcher) with an
+   implementation in flight — the "downstream-first" order was silently
+   skipping the most downstream thing there was. If the claimed issue is
+   stale (no branch, no commits, no running process for it), un-assign it
+   and relabel `stage:proposed` so query 3 picks it up honestly.
 3. Else, **`gh issue list --label stage:proposed --assignee ""`** returns
    anything → play **Implementer** on the oldest unclaimed issue.
 4. Else, **`gh issue list --label stage:proposed`**'s count is below
