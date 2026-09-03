@@ -67,3 +67,17 @@ Lowering `indexing_threshold` to 1,000 KB changes segment layout and therefore g
 - [x] I checked README.md's "Open research questions" and research/DECISION_LOG.md and this isn't a duplicate or already-ruled-out question.
 - [x] This is one answerable question, not a broad restatement of the whole research thesis.
 
+
+---
+
+## Amendment 1 (2026-09-04, after run 0, before any sweep run): the before/after-gate spot-check cannot create its own contrast; replaced by HNSW-vs-exact on the same state
+
+Run 0 (`results/run0_before_after/`, seed 20260999, 100,320 confirmed writes at gate) scored the six replicas immediately before and after the gate and got **identical `index_recall` on every replica** (0.996–1.000, deltas all 0.0). Not because the instrument failed: the gate closed in **2.1s** — the corpus was already 97.8% indexed at the first poll (98,161–99,206 of 100,416 per node), because at 1,000 KB the optimizer keeps pace during the write phase. "Before" and "after" were the same state. The pre-registered prediction was untestable as designed, which this spec's outcome (e) treats as a stop — and this amendment is that stop, before any sweep cell runs.
+
+**What run 0 does establish, on the way:** baseline `index_recall` over 42 samples is 0.991–1.000 (median 0.997). Scored against brute-force top-k over the replica's own local ids, an exact search returns 1.000 by construction; values below 1.000 can only come from an approximate path. That is already evidence the graph is traversed — but it is an inference from a distribution, not a controlled contrast.
+
+**Replacement check, pre-registered here:** at the after-gate moment, score every replica twice on the same query set — default (HNSW) and with `SearchParams.exact = true` (`qdrant_probe.search_batch(exact=True)`, new, default off). Predictions: exact = 1.000 on every replica; HNSW < 1.000 on at least one. If exact ≠ 1.000 the scorer's ground truth is wrong and *that* is the finding; if HNSW = 1.000 everywhere, the metric has no headroom at this scale (outcome (c)) and the sweep still should not run. Only exact = 1.000 ∧ HNSW < 1.000 releases the sweep.
+
+**Also noted for the Interpretation:** 0.991–1.000 leaves ~1% of headroom for chaos to reduce. Outcome (c) is the likeliest; the Interpretation plan for (c) stands (a harder query workload is a `method/*` issue, not more seeds).
+
+No metric, baseline, or outcome definition changes; run 0 is re-run as `results/run0/` with the new flag behaviour, and its first output is kept as `results/run0_before_after/`.

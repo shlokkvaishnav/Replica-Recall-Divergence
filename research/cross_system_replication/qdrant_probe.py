@@ -181,10 +181,17 @@ class ReplicaProbe:
             self._reset()
             return False, set()
 
-    def search_batch(self, queries: np.ndarray, k: int) -> tuple[bool, list[list[str]]]:
+    def search_batch(self, queries: np.ndarray, k: int,
+                     exact: bool = False) -> tuple[bool, list[list[str]]]:
         """Run the whole query set against this replica in ONE round trip --
         CoreSearchBatch takes a `repeated CoreSearchPoints`, so unlike
-        ShardService (no batch RPC), this does not need a per-query loop."""
+        ShardService (no batch RPC), this does not need a per-query loop.
+
+        exact=True sets SearchParams.exact, which makes Qdrant brute-force the
+        query instead of traversing HNSW (issue #30 run 0: scored against the
+        same brute-force ground truth, an exact search must return recall
+        1.000 by construction, so any HNSW recall below it is proof the graph
+        was traversed). Default False -- every existing caller is unchanged."""
         try:
             stub = self._stub_or_connect()
             search_points = [
@@ -194,6 +201,7 @@ class ReplicaProbe:
                         dense=_points.DenseVector(data=[float(x) for x in q]))),
                     limit=k,
                     with_payload=_points.WithPayloadSelector(enable=False),
+                    params=_points.SearchParams(exact=True) if exact else None,
                 )
                 for q in queries
             ]

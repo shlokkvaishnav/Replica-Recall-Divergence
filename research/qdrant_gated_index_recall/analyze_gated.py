@@ -124,9 +124,24 @@ def main() -> int:
             print(f"  {r['name']}: before {r.get('index_recall')}  after {aft.get('index_recall')}  "
                   f"delta {g.get('delta_index_recall', {}).get(r['name'])}")
         deltas = [v for v in g.get("delta_index_recall", {}).values() if v is not None]
-        print(f"  prediction (after < before on the tail): "
+        print(f"  original before/after prediction: "
               f"{'HOLDS' if deltas and max(deltas) < 0 else 'DOES NOT HOLD'} "
-              f"(deltas {deltas})")
+              f"(deltas {deltas}) -- uninformative when the gate closes at once; Amendment 1")
+        if g.get("after_gate_exact"):
+            print("  Amendment 1 -- HNSW vs exact on the same post-gate state:")
+            ex = {r["name"]: r for r in g["after_gate_exact"]}
+            for r in g.get("after_gate", []):
+                print(f"    {r['name']}: hnsw {r.get('index_recall')}  "
+                      f"exact {ex.get(r['name'], {}).get('index_recall')}")
+            exv = [float(r["index_recall"]) for r in g["after_gate_exact"]
+                   if r.get("index_recall") is not None]
+            hv = [float(r["index_recall"]) for r in g.get("after_gate", [])
+                  if r.get("index_recall") is not None]
+            ok_exact = bool(exv) and min(exv) >= 0.9995
+            ok_hnsw = bool(hv) and min(hv) < 0.9995
+            print(f"    exact == 1.000 on every replica: {'YES' if ok_exact else 'NO'};  "
+                  f"HNSW < 1.000 on some replica: {'YES' if ok_hnsw else 'NO'}  -> "
+                  f"{'graph traversed' if ok_exact and ok_hnsw else 'NOT established'}")
         print()
 
     per = {}   # cond -> seed -> dict

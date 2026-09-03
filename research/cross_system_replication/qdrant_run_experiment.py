@@ -277,7 +277,8 @@ def _chaos_thread(dh_mod, args, stop_evt, containers, events, window_s):
 
 
 def sample_once(probes, writer: RetainingWriter, queries: np.ndarray,
-                k: int, settle_s: float, metric: str) -> list[dict]:
+                k: int, settle_s: float, metric: str,
+                exact: bool = False) -> list[dict]:
     t = time.time()
     intended_all = writer.intended_set(settle_s)
     corpus = writer.snapshot_corpus()
@@ -285,7 +286,7 @@ def sample_once(probes, writer: RetainingWriter, queries: np.ndarray,
 
     def _probe_one(p):
         ok_ids, local = p.list_local_ids()
-        ok_search, obs = (p.search_batch(queries, k_fetch) if ok_ids
+        ok_search, obs = (p.search_batch(queries, k_fetch, exact=exact) if ok_ids
                           else (False, []))
         return p.name, {
             "probe": p, "reachable": bool(ok_ids and ok_search),
@@ -703,6 +704,22 @@ def _run_experiment_body(args, writer, queries, node_ids) -> int:
         if gate_scores is not None:
             after = sample_once(probes, writer, queries, args.k, args.settle_s, args.metric)
             gate_scores["after_gate"] = after
+            # SPEC.md (#30) Amendment 1: the decisive contrast is not before vs
+            # after (the optimizer keeps up at 1000 KB, so both saw an indexed
+            # corpus) but HNSW vs exact on the SAME state. Exact must score
+            # 1.000 against the same ground truth; HNSW below it is the graph.
+            after_exact = sample_once(probes, writer, queries, args.k, args.settle_s,
+                                      args.metric, exact=True)
+            gate_scores["after_gate_exact"] = after_exact
+            ex = {r["name"]: r for r in after_exact}
+            gate_scores["hnsw_minus_exact"] = {
+                r["name"]: (None if r.get("index_recall") is None or
+                            ex.get(r["name"], {}).get("index_recall") is None
+                            else round(float(r["index_recall"]) -
+                                       float(ex[r["name"]]["index_recall"]), 6))
+                for r in after}
+            print("[qrr] score-at-gate EXACT:  " + ", ".join(
+                f"{r['name']}={r.get('index_recall')}" for r in after_exact))
             by = {r["name"]: r for r in before}
             gate_scores["delta_index_recall"] = {
                 r["name"]: (None if r.get("index_recall") is None or
