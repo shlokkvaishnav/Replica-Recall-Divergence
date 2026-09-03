@@ -497,6 +497,15 @@ def main() -> int:
                          "samples.csv) rather than measuring an exact scan "
                          "and calling it index_recall. Off by default -- "
                          "existing behaviour unchanged.")
+    ap.add_argument("--score-at-gate", action="store_true",
+                    help="issue #30 run 0: with --index-gate, score the query "
+                         "set on every replica once immediately BEFORE the "
+                         "gate (writers paused, tail un-indexed) and once "
+                         "immediately AFTER it closes, writing gate_scores.json "
+                         "next to run_meta.json. The spot-check PR #29 owed: "
+                         "if after-gate index_recall is not lower than before, "
+                         "indexed_vectors_count does not mean searches "
+                         "traverse the graph. Off by default.")
     ap.add_argument("--index-gate-tol", type=float, default=0.0,
                     help="--index-gate: allowed un-indexed fraction (0.0 = "
                          "every vector on every replica).")
@@ -660,6 +669,18 @@ def _run_experiment_body(args, writer, queries, node_ids) -> int:
               f"({args.index_gate_consecutive} consecutive polls, "
               f"timeout {args.index_gate_timeout:.0f}s)...")
         writer.pause_evt.set()
+        gate_scores = None
+        if args.score_at_gate:
+            # Issue #30 run 0. Same scorer as the sampler, same query set, on
+            # every replica: once with the tail un-indexed, once after the
+            # gate closes. HNSW is approximate and exact scan is not, so
+            # index_recall should DROP on the tail once it is indexed -- if
+            # it does not, "indexed" is a counter, not a search path.
+            time.sleep(args.settle_s)
+            before = sample_once(probes, writer, queries, args.k, args.settle_s, args.metric)
+            gate_scores = {"before_gate": before}
+            print("[qrr] score-at-gate BEFORE: " + ", ".join(
+                f"{r['name']}={r.get('index_recall')}" for r in before))
         index_gate = gate_mod.wait_for_index_gate(
             node_ids, tol=args.index_gate_tol,
             consecutive=args.index_gate_consecutive,
@@ -679,6 +700,24 @@ def _run_experiment_body(args, writer, queries, node_ids) -> int:
             with open(os.path.join(args.results_dir, "index_gate_failed.json"), "w") as f:
                 json.dump(index_gate, f, indent=2)
             return 3
+        if gate_scores is not None:
+            after = sample_once(probes, writer, queries, args.k, args.settle_s, args.metric)
+            gate_scores["after_gate"] = after
+            by = {r["name"]: r for r in before}
+            gate_scores["delta_index_recall"] = {
+                r["name"]: (None if r.get("index_recall") is None or
+                            by.get(r["name"], {}).get("index_recall") is None
+                            else round(float(r["index_recall"]) -
+                                       float(by[r["name"]]["index_recall"]), 6))
+                for r in after}
+            gate_scores["gate"] = {k: index_gate.get(k) for k in
+                                   ("elapsed_s", "min_fraction_at_end", "per_node_at_end")}
+            with open(os.path.join(args.results_dir, "gate_scores.json"), "w") as f:
+                json.dump(gate_scores, f, indent=2, default=float)
+            print("[qrr] score-at-gate AFTER:  " + ", ".join(
+                f"{r['name']}={r.get('index_recall')}" for r in after))
+            print("[qrr] score-at-gate delta:  " + ", ".join(
+                f"{k}={v}" for k, v in gate_scores["delta_index_recall"].items()))
         writer.pause_evt.clear()
         print(f"[qrr] index gate closed at t={index_gate['gate_closed_rel']:.1f}s; "
               f"writers resumed")
