@@ -1,0 +1,17 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "startup|resume|clear",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$CLAUDE_PROJECT_DIR/.claude/hooks/pipeline-autostart.sh\"",
+            "timeout": 15,
+            "statusMessage": "Switching on the research pipeline loop"
+          }
+        ]
+      }
+    ]
+  }
+}

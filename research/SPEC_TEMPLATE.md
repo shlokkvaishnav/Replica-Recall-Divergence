@@ -40,6 +40,36 @@ How will this be tested? System(s), topology, fault model, dataset, query worklo
 
 What is actually measured, and which of those measurements decide the outcome.
 
+## Instrument characterization
+
+*(Required for any confirmatory sweep. Fill in from existing artifacts before
+spending compute — archived runs are usually enough.)*
+
+Pre-registration protects the question from the answer; it does not protect
+the measurement from the apparatus. Three consecutive confirmatory sweeps in
+this project failed their own validity preconditions after the fact, and in
+each case the failing quantity was measurable beforehand from data already in
+the repo: the corpus was un-indexed for the whole measurement window
+(`qdrant_optimizer_masking/`, correcting `cross_system_replication/`), the
+chaos window was an unnoticed function of the variable being varied
+(`experiment/qdrant-kill-spacing`, PR #20), and the probe was too slow to
+resolve the signal it was measuring (`kill_spacing_corrected/`, PR #25 —
+which derived all three of its own amendments from #9's archived runs at zero
+cost, and then still missed the fourth). State, with the run that measured it:
+
+- **Sampling interval, realized** — not the requested `--sample-interval`, the
+  measured one, and what dominates it (probe cost, scoring cost, corpus size).
+- **Signal lag and duration** — how long after the treatment the measured
+  quantity moves, and for how long it stays moved (e.g. damage appears a
+  median 14.1s after a kill, range 7.5–46.8s; episodes last N samples).
+- **The ratio** — samples per signal episode at the interval above. Say the
+  minimum you need and why. If the ratio is unknown, the sweep is a pilot,
+  not a confirmatory run, and the Decision section must say so.
+- **What the instrument is actually measuring** — if a metric is computed by
+  the system under test (an index recall, a count), what state must hold for
+  it to mean what the Metrics section says it means, and how that state is
+  confirmed during the run.
+
 ## Baselines / controls
 
 What is this compared against? Note if a no-fault / no-treatment baseline is required to establish a noise floor before the treatment condition means anything (as it was for `replica_recall/`'s chaos-vs-baseline design).

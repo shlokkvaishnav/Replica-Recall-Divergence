@@ -142,28 +142,53 @@ Comments, doesn't push code, doesn't merge.
    independently-verifiable defect are the cycle working, not looping; a
    round that only verifies a previous round's fix and reaches a decision is
    not a findings round and does not count against the cap.
-1. Read the issue, the PR template's filled-in answers, and the diff, as if
+1. **Audit the diff mechanically before reading any prose.** Run
+
+   ```bash
+   gh pr diff <N> --name-only
+   gh pr diff <N> --name-status | grep -E '^(D|R)'          # deletions, renames
+   gh pr diff <N> --name-only | grep -E '(^|/)results?(_|/)' # result data touched
+   gh pr view <N> --json headRefOid -q .headRefOid           # the head you are reviewing
+   ```
+
+   and compare the file list against the PR body's "Did the implementation
+   introduce any unintended changes elsewhere?" answer. Any file the body
+   does not account for, any deletion, and any change under a `results*/`
+   directory is a finding before a word of the writeup has been read. This
+   step exists because PR #27's body said "One file" while its diff deleted
+   three tracked result files, and the two merges that had put those files
+   on `main` (#18, #24) were never asked the question. A body that
+   misdescribes its own diff has failed research integrity regardless of
+   how good the code is; a script can catch that where a reader will not.
+2. Read the issue, the PR template's filled-in answers, and the diff, as if
    seeing them for the first time — see "Guarding role separation," below,
    for why that matters more now than it did with three sessions.
-2. Check the mini-peer-review questions were actually answered, not just
+3. Check the mini-peer-review questions were actually answered, not just
    present — "what does this NOT establish" filled in with "N/A" is a red
    flag, not a passing answer.
-3. Check `GIT_WORKFLOW.md`'s "when not to merge" list explicitly —
+4. Check `GIT_WORKFLOW.md`'s "when not to merge" list explicitly —
    irreproducible, uncontrolled confound, multiple variables changed at
    once, cherry-picked runs, unsupported claims.
-4. Post a PR comment with your own MERGE / ARCHIVE / REVISE / ABANDON /
+5. Post a PR comment with your own MERGE / ARCHIVE / REVISE / ABANDON /
    REPRODUCE recommendation and why, using the same nine dimensions
    `GIT_WORKFLOW.md` lists. If REVISE or CHANGES REQUESTED, be specific
    enough that the implementer role (which, per "Guarding role separation,"
    is not allowed to lean on what it remembers deciding) can act on it from
-   the comment alone.
-5. Label accordingly: `stage:changes-requested` if more work is needed,
+   the comment alone. **A MERGE decision must name the head SHA it
+   reviewed** (from step 1) — that SHA is what query 0 below checks against
+   `main` after the human merges. PR #18 merged a head other than the one
+   reviewed and lost two review fixes (re-landed in #19); a decision that
+   does not say which commit it approved cannot be verified afterwards.
+6. Label accordingly: `stage:changes-requested` if more work is needed,
    `stage:approved-pending-merge` if you'd merge it — label **both** the PR
    and its linked issue.
-6. If ARCHIVE / ABANDON / REPRODUCE: label accordingly (PR and issue both),
-   and add an entry to `research/DECISION_LOG.md` — the reviewer role is the
-   one that has just read the full evidence, so this is the right point to
-   record why, not something to leave for later.
+7. If ARCHIVE / ABANDON / REPRODUCE — **or if the decision says to stop a
+   line of work** — label accordingly (PR and issue both), and add an entry
+   to `research/DECISION_LOG.md` — the reviewer role is the one that has
+   just read the full evidence, so this is the right point to record why,
+   not something to leave for later. A decision that lives only in a PR
+   comment is not recorded: PR #25's round 2 said "STOP this line of work"
+   and nothing in the log said so until 2026-09-03.
 
 **Do not:** merge (that's the user's call), rewrite the implementer's code,
 or approve because the numbers look good without checking whether the
@@ -180,6 +205,19 @@ condition 5 (idle) is reached. This priority order clears the pipeline
 downstream-first, so work already in flight finishes before new work
 starts:
 
+0. **`gh pr list --state merged --label stage:approved-pending-merge`**
+   returns anything → **post-merge verification**, before any role plays.
+   For each such PR, take the head SHA named in the reviewer's MERGE comment
+   and check `git merge-base --is-ancestor <sha> origin/main`. If it holds:
+   relabel PR and linked issue `stage:merged`, and update the affected row
+   in `research/README.md`'s experiment index (a row still reading "In
+   progress" after its PR merged is the defect #15 found and #25
+   re-created). If it does not hold, the human merged a different head than
+   was reviewed: comment on the PR naming both SHAs, label it
+   `stage:changes-requested`, and stop — the implementer role re-lands the
+   difference as #19 did for #18. This query exists because the pipeline
+   otherwise has no check that what reached `main` is what was reviewed,
+   which #19 pointed out and which stayed unimplemented for a day.
 1. **`gh pr list --label stage:in-review`** returns anything → play
    **Reviewer** on the oldest PR.
 2. Else, **`gh pr list --label stage:changes-requested`** returns anything
@@ -280,3 +318,19 @@ harness's `/loop` skill (dynamic pacing, no fixed interval needed) or a
 cron. Nothing about the label taxonomy, templates, or role instructions
 needs to change to run this way; only the three separate per-role loops
 originally sketched here collapsed into the single decision tree above.
+
+**The loop is on by default.** `.claude/settings.json` registers a
+`SessionStart` hook (`.claude/hooks/pipeline-autostart.sh`) that tells every
+Claude Code session opened in this repository to start `/loop` on this
+document's role selection on its first turn, unless the user's message says
+not to. Before 2026-09-03 the loop only ran when someone typed the command,
+and PRs sat at `stage:in-review` until someone remembered — the hook makes
+the pipeline the default state of a session rather than an opt-in. Disable
+it by removing the `SessionStart` entry.
+
+**Changes to this pipeline itself go straight to `main`.** The owner decided
+on 2026-09-03 that edits to the roles, role selection, templates, and hooks —
+the process, not the research — are committed to `main` directly, the way
+`GIT_WORKFLOW.md` already treats editorial changes. Research branches keep
+the full spec → PR → review → manual-merge path; the merge rule below is
+about those.
