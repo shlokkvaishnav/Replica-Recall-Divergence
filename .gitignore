@@ -18,3 +18,14 @@ venv/
 research/replica_recall/results*/
 research/replica_recall/forensics_events/
 research/replica_recall/forensics_results.json
+
+# qdrant_run_experiment.py's default scratch output. Only these four files --
+# the named *_pilot* files beside them are deliberate evidence and stay
+# tracked. Untracked because PR #18 and PR #24 each committed the last run's
+# scratch output by accident, so main carried an unlabeled stale run for two
+# merges (found in PR #27 review). Evidence is MOVED to a named directory, which
+# is what qdrant_sweep.py does.
+research/cross_system_replication/results/samples.csv
+research/cross_system_replication/results/events.json
+research/cross_system_replication/results/run_meta.json
+research/cross_system_replication/results/telemetry.csv

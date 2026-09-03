@@ -499,7 +499,9 @@ def main() -> int:
     args.run_id = uuid.uuid4().hex[:12]
     args.run_started_iso = datetime.datetime.now(
         datetime.timezone.utc).isoformat()
-    args.results_dir = results_dir = args.out_dir or RESULTS_DIR
+    # abspath: a relative --out-dir must mean the same place whether the caller
+    # is qdrant_sweep.py (cwd = repo root) or a hand in this directory.
+    args.results_dir = results_dir = os.path.abspath(args.out_dir or RESULTS_DIR)
     os.makedirs(results_dir, exist_ok=True)
     for name in OUTPUT_FILES:
         stale = os.path.join(results_dir, name)

@@ -51,10 +51,21 @@ leaving the previous run's output to be picked up as fresh.
 
 That matters more than it sounds. During #24 a hand-written bash loop was used
 instead, a dead Docker daemon failed all 15 runs, and the loop copied one stale
-predecessor 15 times into 15 differently-named directories. Nothing was
-committed, but the data was internally consistent and looked real; it was caught
-only because identical inputs produced identical outputs. The sweep tool would
-have refused at the first run.
+predecessor 15 times into 15 differently-named directories. None of the 15
+fabricated directories was committed, but the data was internally consistent and
+looked real; it was caught only because identical inputs produced identical
+outputs. The sweep tool would have refused at the first run.
+
+**Scratch output is untracked by design.** `results/samples.csv`, `events.json`,
+`run_meta.json` and `telemetry.csv` are in `.gitignore`. They were not always:
+PR #18 and PR #24 each committed the last run's scratch output as a side-effect,
+so `main` carried an unlabeled stale run in this directory for two merges --
+the same hazard as above, sitting in the validated research state (found in
+PR #27's review; the deleted copy was byte-identical to
+`../kill_spacing_corrected/results/short-gap-same-node_seed20260950/`). Evidence
+belongs in a *named* directory, moved there deliberately -- which is what
+`qdrant_sweep.py` does, and what the `*_pilot*` files beside the scratch paths
+are.
 
 If a sweep needs conditions `qdrant_sweep.py` does not express -- its own are the
 fixed `baseline`/`chaos`/`quiesce` triple -- extend it rather than replacing it
