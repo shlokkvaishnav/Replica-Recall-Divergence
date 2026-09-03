@@ -1,6 +1,6 @@
 [
   {
-    "t": 1788429818.8192563,
+    "t": 1788428900.5202556,
     "target": "rrd-qdrant-node0",
     "alive_after_restart": true,
     "down_for_s": 4.5,
@@ -8,14 +8,14 @@
     "condition": "short-gap-same-node",
     "seq": 0,
     "requested_at_s": 0.0,
-    "realized_at_s": 0.271,
+    "realized_at_s": 0.198,
     "requested_gap_s": null,
     "realized_gap_s": null,
     "killed_while_down": false,
-    "t_rel": 40.314
+    "t_rel": 40.206
   },
   {
-    "t": 1788429828.311296,
+    "t": 1788428910.0985644,
     "target": "rrd-qdrant-node0",
     "alive_after_restart": true,
     "down_for_s": 4.5,
@@ -23,14 +23,14 @@
     "condition": "short-gap-same-node",
     "seq": 1,
     "requested_at_s": 9.5,
-    "realized_at_s": 9.763,
+    "realized_at_s": 9.776,
     "requested_gap_s": 5.0,
-    "realized_gap_s": 1.173,
+    "realized_gap_s": 1.904,
     "killed_while_down": false,
-    "t_rel": 49.806
+    "t_rel": 49.784
   },
   {
-    "t": 1788429838.8445592,
+    "t": 1788428919.4392412,
     "target": "rrd-qdrant-node0",
     "alive_after_restart": true,
     "down_for_s": 4.5,
@@ -38,10 +38,10 @@
     "condition": "short-gap-same-node",
     "seq": 2,
     "requested_at_s": 19.0,
-    "realized_at_s": 20.296,
+    "realized_at_s": 19.117,
     "requested_gap_s": 5.0,
-    "realized_gap_s": 2.082,
+    "realized_gap_s": 0.665,
     "killed_while_down": false,
-    "t_rel": 60.339
+    "t_rel": 59.125
   }
 ]
