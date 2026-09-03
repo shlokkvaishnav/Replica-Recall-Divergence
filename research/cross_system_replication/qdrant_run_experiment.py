@@ -54,6 +54,7 @@ sys.path.insert(0, REPLICA_RECALL_DIR)
 import qdrant_topology as topo                                    # noqa: E402
 import qdrant_docker_harness as dh                                # noqa: E402
 import qdrant_probe as probe_mod                                  # noqa: E402
+import qdrant_index_gate as gate_mod                              # noqa: E402
 from metrics import (                                             # noqa: E402
     Corpus, score_replica, pairwise_agreement, leave_one_out_agreement,
 )
@@ -84,6 +85,7 @@ class RetainingWriter:
         self.dim = dim
         self.batch_size = batch_size
         self.lock = threading.Lock()
+        self.pause_evt = threading.Event()   # set => writers idle (issue #28)
         self.vector_of: dict[str, np.ndarray] = {}
         self.confirmed_at: dict[str, float] = {}
         self.attempted = 0
@@ -168,6 +170,14 @@ class RetainingWriter:
 
     def loop(self, stop_evt: threading.Event, node_ids: list[int]) -> None:
         while not stop_evt.is_set():
+            # Issue #28: the indexing gate holds writers here so the optimizer
+            # can catch up on a fixed corpus. Nothing is measured while paused
+            # (the sampler has not started yet), so pausing changes when the
+            # baseline clock starts, not what any sample sees.
+            while self.pause_evt.is_set() and not stop_evt.is_set():
+                time.sleep(0.1)
+            if stop_evt.is_set():
+                return
             batch = self._make_batch(self.batch_size)
             if not batch:
                 print("[writer] corpus pool exhausted -- stopping this writer. "
@@ -398,7 +408,7 @@ def telemetry_loop(stop_evt, node_ids, interval_s, rows_out, errors_out):
         stop_evt.wait(interval_s)
 
 
-def bring_up_cluster(node_ids) -> bool:
+def bring_up_cluster(node_ids, indexing_threshold_kb: int | None = None) -> bool:
     subprocess.run(["docker", "compose", "-p", topo.PROJECT, "-f", topo.COMPOSE_PATH,
                     "down", "-v"], capture_output=True)
     topo.write_compose_file()
@@ -413,7 +423,7 @@ def bring_up_cluster(node_ids) -> bool:
     if not topo.wait_for_cluster_formed(node_ids):
         print("[qrr] FATAL: cluster never formed (peers did not converge)", file=sys.stderr)
         return False
-    if not topo.create_collection():
+    if not topo.create_collection(indexing_threshold_kb=indexing_threshold_kb):
         print("[qrr] FATAL: collection creation failed", file=sys.stderr)
         return False
     if not topo.wait_for_shards_active(node_ids):
@@ -477,8 +487,38 @@ def main() -> int:
                          "cadence, written to results/telemetry.csv. Off by "
                          "default -- does not affect samples.csv or any "
                          "other branch's behavior.")
+    ap.add_argument("--index-gate", action="store_true",
+                    help="issue #28: after --warmup-s, pause the writers and "
+                         "block until every replica reports the corpus HNSW-"
+                         "indexed (indexed_vectors_count >= (1 - tol) * "
+                         "points_count, status green) for --index-gate-"
+                         "consecutive polls, THEN start the sampler. A run "
+                         "whose gate never closes FAILS (exit 3, no "
+                         "samples.csv) rather than measuring an exact scan "
+                         "and calling it index_recall. Off by default -- "
+                         "existing behaviour unchanged.")
+    ap.add_argument("--index-gate-tol", type=float, default=0.0,
+                    help="--index-gate: allowed un-indexed fraction (0.0 = "
+                         "every vector on every replica).")
+    ap.add_argument("--index-gate-consecutive", type=int, default=3,
+                    help="--index-gate: consecutive 1s polls that must pass.")
+    ap.add_argument("--index-gate-timeout", type=float, default=600.0,
+                    help="--index-gate: seconds before the run gives up and "
+                         "fails.")
+    ap.add_argument("--indexing-threshold-kb", type=int, default=None,
+                    help="issue #28: Qdrant optimizers_config.indexing_"
+                         "threshold at collection creation, in KB (Qdrant's "
+                         "default is 20000, ~40k 128-d vectors per segment "
+                         "before HNSW builds). Unset = Qdrant default; "
+                         "recorded in run_meta.json either way.")
     args = ap.parse_args()
 
+    if args.index_gate and args.index_gate_consecutive < 1:
+        print("ERROR: --index-gate-consecutive must be >= 1.", file=sys.stderr)
+        return 2
+    if args.index_gate and not (0.0 <= args.index_gate_tol < 1.0):
+        print("ERROR: --index-gate-tol must be in [0, 1).", file=sys.stderr)
+        return 2
     if args.kill_schedule and args.no_chaos:
         print("ERROR: --kill-schedule and --no-chaos are contradictory.",
               file=sys.stderr)
@@ -525,7 +565,7 @@ def main() -> int:
         # every later run in a sweep by squatting on qdrant_topology.py's
         # fixed ports. Two consecutive sweep runs failed exactly this way
         # and had to be torn down and re-run by hand before this fix.
-        if not bring_up_cluster(node_ids):
+        if not bring_up_cluster(node_ids, args.indexing_threshold_kb):
             return 1
         print("[qrr] cluster ready, collection created, shards Active")
         return _run_experiment_body(args, writer, queries, node_ids)
@@ -555,6 +595,45 @@ def _run_experiment_body(args, writer, queries, node_ids) -> int:
     t_start = time.time()
     print(f"[qrr] warmup {args.warmup_s:.0f}s (writing, no faults)...")
     time.sleep(args.warmup_s)
+
+    # Issue #28: hold the writers on a fixed corpus and wait for every
+    # replica to report it HNSW-indexed BEFORE the sampler exists. Placed
+    # here, after warmup and before the sampler thread, so a closed gate is a
+    # property of every sample in the run, and a gate that never closes
+    # produces no samples.csv at all -- the run fails the way a dead daemon
+    # does (#26), visibly, instead of measuring exact scans and calling it
+    # index_recall. The gate's own duration is not part of the baseline
+    # window; gate_closed_rel in run_meta.json records where the clock
+    # actually started.
+    index_gate = None
+    if args.index_gate:
+        print(f"[qrr] index gate: writers paused, waiting for every replica "
+              f"indexed >= {1.0 - args.index_gate_tol:.4f} "
+              f"({args.index_gate_consecutive} consecutive polls, "
+              f"timeout {args.index_gate_timeout:.0f}s)...")
+        writer.pause_evt.set()
+        index_gate = gate_mod.wait_for_index_gate(
+            node_ids, tol=args.index_gate_tol,
+            consecutive=args.index_gate_consecutive,
+            timeout_s=args.index_gate_timeout,
+            log=lambda m: print(f"[qrr] {m}", flush=True))
+        index_gate["gate_opened_rel"] = round(
+            time.time() - t_start - index_gate["elapsed_s"], 3)
+        index_gate["gate_closed_rel"] = round(time.time() - t_start, 3)
+        if not index_gate["closed"]:
+            print("[qrr] FATAL: index gate never closed -- refusing to measure "
+                  "an un-indexed corpus. No samples.csv written.",
+                  file=sys.stderr)
+            stop_evt.set()
+            for t in threads:
+                t.join(timeout=10.0)
+            # Leave the gate record where a sweep can see why the run failed.
+            with open(os.path.join(args.results_dir, "index_gate_failed.json"), "w") as f:
+                json.dump(index_gate, f, indent=2)
+            return 3
+        writer.pause_evt.clear()
+        print(f"[qrr] index gate closed at t={index_gate['gate_closed_rel']:.1f}s; "
+              f"writers resumed")
 
     st = threading.Thread(
         target=sampler_loop,
@@ -723,6 +802,11 @@ def _run_experiment_body(args, writer, queries, node_ids) -> int:
         "run_id": args.run_id,
         "started_at": args.run_started_iso,
         "argv": sys.argv[1:],
+        # Issue #28: was the corpus indexed before measurement, and on what
+        # threshold. index_gate is None when the run did not ask for the
+        # gate, so a consumer can tell "not gated" from "gate closed".
+        "indexing_threshold_kb": args.indexing_threshold_kb,
+        "index_gate": index_gate,
     }
     with open(os.path.join(args.results_dir, "run_meta.json"), "w") as f:
         json.dump(meta, f, indent=2)
