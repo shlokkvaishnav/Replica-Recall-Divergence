@@ -37,6 +37,7 @@ THRESHOLDS = [None, 5000, 1000]          # None = Qdrant default (20000 KB)
 CORPORA = [100_000, 200_000]
 REPEATS = 2
 SEED0 = 20260970
+POOL_HEADROOM = 150_000   # SIFT pool beyond the gated corpus (SPEC.md Amendment 2)
 
 # Held constant across every cell (SPEC.md): protocol write rate (4 writers,
 # batch 32), --queries 10 (PR #25 showed completeness does not depend on it
@@ -66,7 +67,13 @@ def run_one(name, thr, n, seed, extra, dry):
     if os.path.exists(os.path.join(dest, "run_meta.json")) or \
        os.path.exists(os.path.join(dest, "index_gate_failed.json")):
         return "SKIP (already present)"
-    cmd = [sys.executable, RUNNER, "--seed", str(seed), "--sift-vectors", str(n),
+    # SPEC.md Amendment 2: the corpus the gate waits on is n CONFIRMED writes,
+    # not "whatever --warmup-s allowed" (the first cell gated a 67k corpus
+    # labelled 100k). The SIFT pool is n + 150k so writers can resume after
+    # the gate -- the chaos cell needs writes in flight.
+    cmd = [sys.executable, RUNNER, "--seed", str(seed),
+           "--sift-vectors", str(n + POOL_HEADROOM),
+           "--warmup-until-written", str(n), "--warmup-cap-s", "600",
            "--out-dir", dest] + COMMON + extra
     if thr is not None:
         cmd += ["--indexing-threshold-kb", str(thr)]
@@ -85,10 +92,13 @@ def run_one(name, thr, n, seed, extra, dry):
     if not os.path.exists(os.path.join(dest, "samples.csv")) or not os.path.exists(meta_p):
         return f"FAILED (no samples.csv/run_meta.json)  {dt:5.0f}s"
     meta = json.load(open(meta_p))
-    if meta.get("seed") != seed or meta.get("sift_vectors") != n or \
-       meta.get("indexing_threshold_kb") != thr:
-        return (f"FAILED (run_meta mismatch: seed {meta.get('seed')} vectors "
-                f"{meta.get('sift_vectors')} thr {meta.get('indexing_threshold_kb')})")
+    if meta.get("seed") != seed or meta.get("warmup_until_written") != n or \
+       meta.get("sift_vectors") != n + POOL_HEADROOM or \
+       meta.get("indexing_threshold_kb") != thr or \
+       (meta.get("written_at_gate") or 0) < n:
+        return (f"FAILED (run_meta mismatch: seed {meta.get('seed')} target "
+                f"{meta.get('warmup_until_written')} written {meta.get('written_at_gate')} "
+                f"pool {meta.get('sift_vectors')} thr {meta.get('indexing_threshold_kb')})")
     g = meta.get("index_gate") or {}
     return f"ok  gate {g.get('elapsed_s')}s  {dt:5.0f}s"
 

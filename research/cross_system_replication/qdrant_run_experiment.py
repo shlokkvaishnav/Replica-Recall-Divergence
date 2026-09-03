@@ -505,6 +505,17 @@ def main() -> int:
     ap.add_argument("--index-gate-timeout", type=float, default=600.0,
                     help="--index-gate: seconds before the run gives up and "
                          "fails.")
+    ap.add_argument("--warmup-until-written", type=int, default=None,
+                    help="issue #28: extend the warmup past --warmup-s until "
+                         "at least N vectors are CONFIRMED written, so the "
+                         "corpus the gate waits on is a controlled size "
+                         "rather than 'whatever --warmup-s allowed'. The "
+                         "first gate sweep cell mislabelled a 67k corpus as "
+                         "100k this way. Keep --sift-vectors larger than N "
+                         "so writers can resume after the gate.")
+    ap.add_argument("--warmup-cap-s", type=float, default=600.0,
+                    help="--warmup-until-written: give up (run fails, exit 4) "
+                         "if N is not reached within this many seconds.")
     ap.add_argument("--indexing-threshold-kb", type=int, default=None,
                     help="issue #28: Qdrant optimizers_config.indexing_"
                          "threshold at collection creation, in KB (Qdrant's "
@@ -595,6 +606,43 @@ def _run_experiment_body(args, writer, queries, node_ids) -> int:
     t_start = time.time()
     print(f"[qrr] warmup {args.warmup_s:.0f}s (writing, no faults)...")
     time.sleep(args.warmup_s)
+
+    # Issue #28: a gate on "the corpus" needs the corpus to be a known size.
+    # --warmup-s alone makes it write-rate x seconds, which the first sweep
+    # cell showed is ~67k when the label said 100k. Extend the warmup until
+    # N confirmed writes; fail (exit 4) rather than gate a smaller corpus.
+    written_at_gate = None
+    if args.warmup_until_written is not None:
+        target = args.warmup_until_written
+        t_cap = time.time() + args.warmup_cap_s
+        last_log = 0.0
+        while True:
+            with writer.lock:
+                n_conf = len(writer.confirmed_at)
+                exhausted = writer.exhausted
+            if n_conf >= target:
+                break
+            if exhausted:
+                print(f"[qrr] FATAL: corpus pool exhausted at {n_conf} confirmed "
+                      f"writes, below --warmup-until-written {target}. Raise "
+                      f"--sift-vectors.", file=sys.stderr)
+                stop_evt.set()
+                return 4
+            if time.time() >= t_cap:
+                print(f"[qrr] FATAL: only {n_conf}/{target} vectors confirmed "
+                      f"within --warmup-cap-s {args.warmup_cap_s:.0f}s.",
+                      file=sys.stderr)
+                stop_evt.set()
+                return 4
+            now = time.time() - t_start
+            if now - last_log >= 10.0:
+                print(f"[qrr] warmup extended: {n_conf}/{target} written at "
+                      f"t={now:.0f}s", flush=True)
+                last_log = now
+            time.sleep(0.5)
+        written_at_gate = n_conf
+        print(f"[qrr] warmup reached {n_conf} confirmed writes at "
+              f"t={time.time() - t_start:.1f}s")
 
     # Issue #28: hold the writers on a fixed corpus and wait for every
     # replica to report it HNSW-indexed BEFORE the sampler exists. Placed
@@ -807,6 +855,8 @@ def _run_experiment_body(args, writer, queries, node_ids) -> int:
         # gate, so a consumer can tell "not gated" from "gate closed".
         "indexing_threshold_kb": args.indexing_threshold_kb,
         "index_gate": index_gate,
+        "warmup_until_written": args.warmup_until_written,
+        "written_at_gate": written_at_gate,
     }
     with open(os.path.join(args.results_dir, "run_meta.json"), "w") as f:
         json.dump(meta, f, indent=2)

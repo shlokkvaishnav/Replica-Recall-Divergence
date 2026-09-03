@@ -91,3 +91,15 @@ Found by the two harness smoke runs, not by the sweep (50k vectors, 30s warmup, 
 3. 0.05 is chosen so that the 200k cells can close at 1,000 KB and 5,000 KB with margin, and so that the default-threshold cells *cannot* close if the tail is one 20 MB segment (≈20% at 200k) — the sweep then measures the tail rather than assuming it. It is not tuned to any observed number beyond the two runs above.
 
 Nothing in the Metrics, Baselines, or Expected outcomes sections changes; (b) simply gains the plateau mechanism as its likeliest cause.
+
+## Amendment 2 (2026-09-03, after one sweep cell, before any result is used): the gated corpus must be a controlled size
+
+The first sweep cell, `thrdefault_n100k_nochaos_seed20260970`, reported `never-indexed` after a 600s gate. Its `index_gate_failed.json` shows why, and it is not a Qdrant result: every node held **66,816** points, not 100,000. `--sift-vectors` sizes the *pool* the writers draw from; the corpus at gate time was write rate × `--warmup-s` = ~1.6k/s × 40s. At 66.8k points ≈ 17 MB per shard, below the 20 MB default threshold, "never indexed" is the expected outcome for a corpus this spec did not intend to test. The cell is moved to `discarded_uncontrolled_corpus/` (kept, not deleted, per `GIT_WORKFLOW.md`) and excluded from analysis; the sweep was stopped after it rather than producing twelve more mislabelled cells.
+
+**Changes:**
+
+1. Harness: `--warmup-until-written N` extends the warmup until N writes are *confirmed*, failing the run (exit 4) if the pool exhausts or `--warmup-cap-s` elapses first. `run_meta.json` records `warmup_until_written` and `written_at_gate`. Without the flag the harness behaves exactly as before.
+2. Sweep: each cell passes `--warmup-until-written n` with a pool of `n + 150,000`, so the writers can resume after the gate — the chaos cell needs writes in flight — and the driver's `run_meta` check now verifies `written_at_gate >= n`.
+3. Instrument characterization, corrected: the quantity "corpus size" is now `written_at_gate`, a measured number, not a label. The 100k cells should land at ≈25 MB/shard — the boundary PR #11 was sitting on — and the 200k cells at ≈50 MB/shard.
+
+Cost: the extended warmup at ~1.6k/s adds ≈25s (100k) to ≈85s (200k) per cell. No metric, baseline, or outcome definition changes.
