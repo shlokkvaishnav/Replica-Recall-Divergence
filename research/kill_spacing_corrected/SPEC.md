@@ -2,9 +2,9 @@
 
 **Branch:** `experiment/kill-spacing-corrected-measure`
 **Date opened:** 2026-09-02
-**Status:** DRAFT - committed before any run. The three amendments below were
-derived from #9's ARCHIVED runs (no new compute), and one of them reverses the
-design this issue proposed.
+**Status:** COMPLETE - 15 runs done. **VOID by Amendment 4**: the sampling
+precondition failed. The comparison is not reportable; what the runs do give is
+a measured sampling floor and the reason it exists.
 
 Issue: closes #24. Body copied verbatim below (heading levels normalized).
 
@@ -169,3 +169,124 @@ If the primary metric comes back degenerate again, that is a void result to
 record - not a licence to search for a metric that separates. #9's exploratory
 peak/integrated measures exist and will be tempting; they are secondary here
 precisely so that temptation is settled in advance.
+
+---
+
+## Results
+
+15 runs, 5 per condition, seeds 20260950-20260954. Raw data in
+`results/<condition>_seed<seed>/`, analysis in `results/analysis_output.txt`.
+
+### What the amendments fixed
+
+Amendments 1-3 all worked, and measurably:
+
+| | #9 | this sweep |
+|---|---|---|
+| corpus exhausted | 0/15 | 0/15 |
+| `killed_while_down` | 0 | 0 |
+| short/long realized gaps | separated | separated (0.18-2.08s vs 31.34-37.93s) |
+| `probe_s` median | 3.31s | **1.14s** (`--queries` 100 -> 10) |
+| effective sample interval | 10.9s | **4.27s** |
+| damage spikes per kill | 0.69 | **2.29** |
+| samples per damage episode | 1 (never two consecutive) | **2.45 mean, max 7** |
+
+Amendment 1's premise held: damage is lagged, and observing 60s+ past the last
+kill captured episodes that #9's protocol and #24's original proposal would both
+have missed. Amendment 2's mechanism held too -- `completeness` comes from
+`ListLocalIds`, not from queries, so cutting queries bought a 3x cheaper probe at
+no cost to the measured quantity.
+
+### Why it is void anyway
+
+Amendment 4's first bullet: *realized sample interval > 4s median. Void, re-run.*
+
+Median realized interval is **4.27s**, and 10 of 15 runs exceed 4.0s
+(4.14-4.80s). The threshold was chosen as a proxy for ">= 3 samples inside an
+episode", so the substantive goal was measured directly rather than argued
+about: **16 of 42 episodes reached 3+ samples, and 11 of 42 are still single-
+sample**. Both the proxy and the thing it stood for fail. This is not a
+technicality to reason past -- a quarter of episodes are still measured by
+whichever single sample happened to land on them, which is #9's defect at
+reduced amplitude.
+
+The spikes-per-kill precondition (>= 2.0) passed at 2.29. One precondition
+passing does not rescue the other.
+
+### The numbers, recorded because they exist, NOT reportable as a result
+
+From void runs. They are written down so this branch is a complete record and so
+nobody re-runs it expecting different bookkeeping - not as findings.
+
+| metric | short-gap | long-gap | spread |
+|---|---|---|---|
+| **PRIMARY** mean missing (duration-normalized) | 185.3 | 128.3 | 148.7 |
+| secondary peak missing | 3356.6 | 1693.4 | 1956.4 |
+
+Primary: no pair separates (p = 0.55, 0.84, 0.69). Per-seed values overlap
+heavily -- short-gap spans 71.0-296.7, spread spans 75.0-352.8.
+
+Secondary peak: short vs long p=0.0317, short vs spread p=0.0952.
+
+**That peak line is exactly what Amendment 4 predicted would be tempting**, and
+it is refused on three independent grounds, any one of which is sufficient: the
+runs are void; peak is a secondary metric; and peak is the same measure #9's
+exploratory result used, which is why it was demoted to secondary here in
+advance. The pre-registered primary metric found nothing.
+
+### The floor, which is the useful finding
+
+The interval did not miss its target by accident, and the cause is structural:
+
+```
+probe_s 1.14s + score_s 0.83s + 1s requested interval = ~2.97s   realized 4.27s
+```
+
+`probe_s` is no longer dominated by queries -- it is dominated by
+`ListLocalIds`, which ships **81,775 ids per replica** across 6 replicas every
+round. That cost scales with corpus size, and Amendment 2 of #9 requires the
+corpus to stay large enough that writes are still in flight during chaos.
+
+**So sampling resolution and signal availability are in direct tension, through
+the probe.** A smaller corpus samples faster but stops producing damage to
+measure (#9 proved that: 20k vectors, zero missing writes). A larger corpus
+produces damage but cannot be sampled fast enough to resolve it. Turning
+`--sample-interval` down further cannot fix this; the floor is the probe itself.
+
+## Interpretation
+
+**No answer to #24's question**, and the reason is now specific rather than
+diffuse: the measurement is still too slow for the phenomenon, and it is too
+slow for a reason that lowering the interval will not fix.
+
+That is a materially better position than #9 left things. #9 could not say
+whether its null was real or an artifact. This branch can say precisely what
+would have to change: the probe needs a mode that fetches only what
+`completeness` requires, without shipping every id on every replica every round
+-- an id-set digest or a count-plus-checksum, rather than the full list. That is
+a harness change, not a parameter change, and it belongs in its own `method/*`
+branch.
+
+Also worth carrying forward: the lag finding from Amendment 1 (median 14.1s,
+range 7.5-46.8s) and the episode-duration data here are the first quantitative
+description of the damage transient this project has. Any future design needs
+them.
+
+## Decision
+
+**ARCHIVE the result, MERGE the branch** -- the same call as #9 and for a
+related but distinct reason.
+
+- The pre-registered comparison is void and the branch says so, rather than
+  reporting the secondary peak result that would look like a finding.
+- `analyze_corrected.py` is worth keeping: it evaluates and prints validity
+  preconditions before any comparison, and it is what caught this. Unlike #9's
+  analyzer, its comparison path did run on real damage -- 42 episodes across 15
+  runs -- so it is exercised where it matters.
+- The floor diagnosis and the transient characterisation are reusable, and are
+  the reason a third attempt would be designed differently rather than just
+  re-run.
+
+Next, pre-registered separately: a cheaper completeness probe, then this
+experiment again. Not another sweep at these parameters, which would reproduce
+this outcome exactly.

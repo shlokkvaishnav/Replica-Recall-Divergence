@@ -1,0 +1,64 @@
+==============================================================================
+Validity preconditions (SPEC.md Amendment 4) -- evaluated before comparing
+==============================================================================
+run                                  interval samples  dmgd spk/kill  exhaust  kwd
+long-gap-same-node_seed20260950          3.82      64     8     2.67    False    0
+long-gap-same-node_seed20260951          4.53      60     9     3.00    False    0
+long-gap-same-node_seed20260952          4.36      59     8     2.67    False    0
+long-gap-same-node_seed20260953          4.43      56     9     3.00    False    0
+long-gap-same-node_seed20260954          4.00      54     6     2.00    False    0
+short-gap-same-node_seed20260950         4.27      64     4     1.33    False    0
+short-gap-same-node_seed20260951         3.53      61     7     2.33    False    0
+short-gap-same-node_seed20260952         4.19      68     6     2.00    False    0
+short-gap-same-node_seed20260953         4.14      52     3     1.00    False    0
+short-gap-same-node_seed20260954         4.70      60     6     2.00    False    0
+spread_seed20260950                      4.33      58    10     3.33    False    0
+spread_seed20260951                      4.80      57     7     2.33    False    0
+spread_seed20260952                      4.30      65     5     1.67    False    0
+spread_seed20260953                      3.76      71     8     2.67    False    0
+spread_seed20260954                      4.25      63     7     2.33    False    0
+
+  overall spikes per kill : 2.29  (precondition >= 2.0) -> PASS
+  median interval         : 4.27s  (precondition <= 4.0s)
+
+  realized gaps (Amendment 1 -- realized, never requested):
+    short-gap-same-node    n= 10  0.18-2.08s  median 1.18s
+    long-gap-same-node     n= 10  31.34-37.93s  median 35.32s
+    spread                 n=  0  none by construction -- each node killed once
+    short/long overlap: no -- cleanly separated
+
+  PRECONDITION FAILURES:
+    - long-gap-same-node_seed20260951: interval 4.53s > 4.0s
+    - long-gap-same-node_seed20260952: interval 4.36s > 4.0s
+    - long-gap-same-node_seed20260953: interval 4.43s > 4.0s
+    - short-gap-same-node_seed20260950: interval 4.27s > 4.0s
+    - short-gap-same-node_seed20260952: interval 4.19s > 4.0s
+    - short-gap-same-node_seed20260953: interval 4.14s > 4.0s
+    - short-gap-same-node_seed20260954: interval 4.70s > 4.0s
+    - spread_seed20260950: interval 4.33s > 4.0s
+    - spread_seed20260951: interval 4.80s > 4.0s
+    - spread_seed20260952: interval 4.30s > 4.0s
+    - spread_seed20260954: interval 4.25s > 4.0s
+
+==============================================================================
+PRIMARY: mean missing ids over the observation window (duration-normalized)
+==============================================================================
+condition               n      mean    median                          per-seed
+short-gap-same-node     5     185.3     202.5 [71.0, 94.4, 202.5, 261.7, 296.7]
+long-gap-same-node      5     128.3     122.8[91.0, 120.4, 122.8, 132.4, 175.0]
+spread                  5     148.7      96.5  [75.0, 82.4, 96.5, 136.6, 352.8]
+
+  PRIMARY mean missing
+    short-gap-same-node         185.3  vs  long-gap-same-node         128.3   U=16.0   p=0.5476
+    short-gap-same-node         185.3  vs  spread                     148.7   U=14.0   p=0.8413
+    long-gap-same-node          128.3  vs  spread                     148.7   U=15.0   p=0.6905
+
+  secondary: peak missing
+    short-gap-same-node        3356.6  vs  long-gap-same-node        1693.4   U=23.0   p=0.0317*
+    short-gap-same-node        3356.6  vs  spread                    1956.4   U=21.0   p=0.0952
+    long-gap-same-node         1693.4  vs  spread                    1956.4   U=11.0   p=0.8413
+
+  secondary: integrated missing-seconds
+    short-gap-same-node       42071.2  vs  long-gap-same-node       29343.2   U=16.0   p=0.5476
+    short-gap-same-node       42071.2  vs  spread                   34148.9   U=14.0   p=0.8413
+    long-gap-same-node        29343.2  vs  spread                   34148.9   U=15.0   p=0.6905
