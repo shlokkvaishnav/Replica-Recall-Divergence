@@ -145,10 +145,10 @@ Comments, doesn't push code, doesn't merge.
 1. **Audit the diff mechanically before reading any prose.** Run
 
    ```bash
-   gh pr diff <N> --name-only
-   gh pr diff <N> --name-status | grep -E '^(D|R)'          # deletions, renames
-   gh pr diff <N> --name-only | grep -E '(^|/)results?(_|/)' # result data touched
-   gh pr view <N> --json headRefOid -q .headRefOid           # the head you are reviewing
+   H=$(gh pr view <N> --json headRefOid -q .headRefOid)     # the head you are reviewing
+   git fetch origin && git diff --name-status origin/main...$H
+   git diff --name-status origin/main...$H | grep -E '^(D|R)'          # deletions, renames
+   git diff --name-only  origin/main...$H | grep -E '(^|/)results?(_|/)' # result data touched
    ```
 
    and compare the file list against the PR body's "Did the implementation
@@ -160,6 +160,8 @@ Comments, doesn't push code, doesn't merge.
    on `main` (#18, #24) were never asked the question. A body that
    misdescribes its own diff has failed research integrity regardless of
    how good the code is; a script can catch that where a reader will not.
+   (`gh pr diff` has no `--name-status`; the first version of this step
+   said it did, and failed the first time it was run, on #29.)
 2. Read the issue, the PR template's filled-in answers, and the diff, as if
    seeing them for the first time — see "Guarding role separation," below,
    for why that matters more now than it did with three sessions.
