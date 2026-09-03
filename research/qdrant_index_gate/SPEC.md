@@ -103,3 +103,11 @@ The first sweep cell, `thrdefault_n100k_nochaos_seed20260970`, reported `never-i
 3. Instrument characterization, corrected: the quantity "corpus size" is now `written_at_gate`, a measured number, not a label. The 100k cells should land at ≈25 MB/shard — the boundary PR #11 was sitting on — and the 200k cells at ≈50 MB/shard.
 
 Cost: the extended warmup at ~1.6k/s adds ≈25s (100k) to ≈85s (200k) per cell. No metric, baseline, or outcome definition changes.
+
+## Amendment 3 (2026-09-04, after 12 of 13 cells, before the chaos cell's result): the outcome-(iii) chaos cell must run at a threshold whose gate closes
+
+The pre-registered design put the single chaos run at the default threshold. The sweep's first twelve cells settled the gate question before that cell ran: **default 0/4 closed** (plateau 0.855–0.916), **5,000 KB 1/4** (0.846–0.930; the one close at 0.966 fell to 0.80 within the baseline), **1,000 KB 4/4** (close in 4–22s; baseline window 0.87–0.98, ≥0.95 in 8–62% of samples). A default-threshold chaos cell therefore times out at its gate and yields no restart data — outcome (iii) would be *unmeasured*, not answered. The cell is still run and kept, because it was pre-registered and its `GATE-FAILED` record is the evidence for this amendment.
+
+**Change:** one additional chaos cell at 1,000 KB × 200k, seed 20260983, same `--chaos-duration 60 --pre-chaos-s 30`. It is the only cell that can answer (iii) — whether a restart drops a replica back below the bar for longer than the kill itself — and its `reindex_s` is computed by the analysis already committed. Nothing else changes; the 14-cell sweep replaces the 13-cell one in the Results.
+
+**Also recorded here, not as a change:** the mechanism behind the plateaus, read from the live collection during cell 5 (`results/OBSERVATION_during_sweep.md`): `default_segment_number: 0` gives two segments per shard, one of which is the appendable segment; its contents are un-indexed until it alone exceeds `indexing_threshold`, and it is not merged because the segment count is already at target. Amendment 1 called the tail "fixed-size"; it is *write-phase-sized*, which is why it did not shrink at 200k. `hnsw_config.full_scan_threshold: 10000` KB additionally means that segment is exact-scanned even once indexed.

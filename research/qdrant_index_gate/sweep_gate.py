@@ -57,9 +57,17 @@ def cells():
                 name = f"thr{thr if thr is not None else 'default'}_n{n // 1000}k_nochaos_seed{seed}"
                 yield name, thr, n, seed, ["--no-chaos"]
                 seed += 1
-    # outcome (iii): one chaos run at default threshold, 200k
+    # outcome (iii): one chaos run at default threshold, 200k -- as pre-
+    # registered. The sweep showed the default-threshold gate never closes
+    # (0/4 cells), so this cell cannot produce chaos data; it is kept because
+    # it was pre-registered and its GATE-FAILED record is the evidence for why
+    # the cell below exists.
     name = f"thrdefault_n200k_chaos_seed{seed}"
     yield name, None, 200_000, seed, ["--chaos-duration", "60", "--pre-chaos-s", "30"]
+    seed += 1
+    # SPEC.md Amendment 3: (iii) needs a gate that closes. 1000 KB closed 4/4.
+    name = f"thr1000_n200k_chaos_seed{seed}"
+    yield name, 1000, 200_000, seed, ["--chaos-duration", "60", "--pre-chaos-s", "30"]
 
 
 def run_one(name, thr, n, seed, extra, dry):
