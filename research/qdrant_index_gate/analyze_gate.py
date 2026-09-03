@@ -64,8 +64,31 @@ def analyze_run(d: str) -> dict | None:
     meta_p = os.path.join(d, "run_meta.json")
     tele_p = os.path.join(d, "telemetry.csv")
     samp_p = os.path.join(d, "samples.csv")
+    fail_p = os.path.join(d, "index_gate_failed.json")
     if not os.path.exists(meta_p):
-        return None
+        if not os.path.exists(fail_p):
+            return None
+        # A gate that never closed is a result for this pilot (SPEC.md
+        # Amendment 1): say WHICH way it failed. "never-indexed" = no replica
+        # ever reported an indexed vector (below Qdrant's segment threshold,
+        # outcome (c)); "plateau" = every replica reached a stable fraction
+        # below tol -- the appendable-segment tail, outcome (b).
+        g = json.load(open(fail_p))
+        name = os.path.basename(d)
+        thr = None
+        if name.startswith("thr") and not name.startswith("thrdefault"):
+            try:
+                thr = int(name.split("_", 1)[0][3:])
+            except ValueError:
+                pass
+        mf = g.get("min_fraction_at_end") or 0.0
+        return {
+            "run": name, "threshold_kb": thr, "gated": True,
+            "gate_closed": False, "gate_close_s": None, "setup_s": g.get("elapsed_s"),
+            "min_frac_overall": mf,
+            "gate_fail_mode": "never-indexed" if mf == 0.0 else f"plateau@{mf:.4f}",
+            "chaos": "chaos" in name,
+        }
     meta = json.load(open(meta_p))
     out = {
         "run": os.path.basename(d),
@@ -147,8 +170,9 @@ def main() -> int:
         print("no runs found")
         return 1
     cols = ["run", "threshold_kb", "sift_vectors", "chaos", "gated", "gate_closed",
-            "gate_close_s", "base_frac_1p0", "base_n", "chaos_frac_0p95", "chaos_n",
-            "min_frac_overall", "probe_s_median", "reindex_s"]
+            "gate_close_s", "gate_fail_mode", "base_frac_1p0", "base_n",
+            "chaos_frac_0p95", "chaos_n", "min_frac_overall", "probe_s_median",
+            "reindex_s"]
     print("\t".join(cols))
     for r in runs:
         print("\t".join("" if r.get(c) is None else str(r.get(c)) for c in cols))
@@ -163,7 +187,9 @@ def main() -> int:
         cl = [r["gate_close_s"] for r in rs if r["gate_closed"]]
         base = [r["base_frac_1p0"] for r in rs if r.get("base_frac_1p0") is not None]
         chaos = [r["chaos_frac_0p95"] for r in rs if r.get("chaos_frac_0p95") is not None]
-        print(f"  threshold {thr!s:>7}: {len(cl)}/{len(rs)} closed, "
+        modes = sorted({r.get("gate_fail_mode") for r in rs if not r["gate_closed"]} - {None})
+        print(f"  threshold {thr!s:>7}: {len(cl)}/{len(rs)} closed"
+              f"{' (fail: ' + ', '.join(modes) + ')' if modes else ''}, "
               f"close_s range {min(cl) if cl else None}-{max(cl) if cl else None}, "
               f"baseline@1.0 range {min(base) if base else None}-{max(base) if base else None}, "
               f"chaos@0.95 range {min(chaos) if chaos else None}-{max(chaos) if chaos else None}")

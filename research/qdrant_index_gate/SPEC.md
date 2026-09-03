@@ -74,3 +74,20 @@ The control is the current harness with no gate and default threshold, run under
 - [x] I checked README.md's "Open research questions" and research/DECISION_LOG.md and this isn't a duplicate or already-ruled-out question.
 - [x] This is one answerable question, not a broad restatement of the whole research thesis.
 
+
+---
+
+## Amendment 1 (2026-09-03, before the sweep): `tol = 0` is unreachable by construction; the sweep gates at `tol = 0.05`
+
+Found by the two harness smoke runs, not by the sweep (50k vectors, 30s warmup, `--no-chaos`, gate timeout 300s):
+
+- **Default threshold (20,000 KB):** every node reported `0 / 48,512` indexed for the full 300s, 4 segments each, `status green`, `optimizer_status ok`. 48.5k × 512 B ≈ 24.8 MB across 2 shards ≈ 12.4 MB per shard — no segment ever crosses the threshold, so nothing indexes. The gate failed as designed (exit 3, `index_gate_failed.json`, no `samples.csv`). Not a finding about the protocol — a 50k corpus is below Qdrant's default indexing floor — but it explains PR #11 exactly: at 100k (≈25 MB/shard) the first segment barely clears 20 MB, which is why indexing first appeared at t≈83s and never completed within the run.
+- **1,000 KB threshold:** indexing kept pace with the writers during warmup. At the moment the gate opened every node was already at its plateau — `32,419 / 35,040` (0.925), `32,401` (0.925), `33,192` (0.947) — and stayed there, unchanged to the vector, for 300s. Qdrant keeps one *appendable* segment per shard un-indexed to receive writes, and reports its points in `points_count` but never in `indexed_vectors_count`. The residual is therefore structural, not lag: `indexed_vectors_count == points_count` cannot occur while a collection accepts writes at all.
+
+**Consequences for this spec:**
+
+1. The Hypothesis section's gate condition, "`indexed_vectors_count == points_count`," is amended to "`indexed_vectors_count >= (1 − tol) · points_count` with `tol = 0.05`." The harness flag existed for this reason; its default stays 0.0 so a run that asks for the impossible fails loudly rather than silently passing at some hidden tolerance.
+2. The residual fraction at gate close becomes a **reported quantity** (`min_fraction_at_end` in `run_meta.json`): it is the size of the appendable tail relative to the corpus and is expected to fall with corpus size at a fixed threshold (≈2.6k vectors ≈ 7.5% at 35k; ≈1.3% at 200k) and to be *larger than `tol`* at the default threshold, where the tail can be up to one full sub-threshold segment. A default-threshold gate that fails on the residual alone — every replica plateaued, `optimizer_status ok`, fraction stable across `consecutive` polls — is outcome (b), not (c), and `analyze_gate.py` must distinguish "never indexed" from "plateaued below tol."
+3. 0.05 is chosen so that the 200k cells can close at 1,000 KB and 5,000 KB with margin, and so that the default-threshold cells *cannot* close if the tail is one 20 MB segment (≈20% at 200k) — the sweep then measures the tail rather than assuming it. It is not tuned to any observed number beyond the two runs above.
+
+Nothing in the Metrics, Baselines, or Expected outcomes sections changes; (b) simply gains the plateau mechanism as its likeliest cause.

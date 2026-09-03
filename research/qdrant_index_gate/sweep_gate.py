@@ -44,7 +44,8 @@ SEED0 = 20260970
 # whether it keeps up once writers resume.
 COMMON = ["--writers", "4", "--batch-size", "32", "--queries", "10",
           "--warmup-s", "40", "--duration", "120",
-          "--index-gate", "--index-gate-timeout", "600", "--capture-telemetry"]
+          "--index-gate", "--index-gate-tol", "0.05",   # SPEC.md Amendment 1
+          "--index-gate-timeout", "600", "--capture-telemetry"]
 
 
 def cells():
