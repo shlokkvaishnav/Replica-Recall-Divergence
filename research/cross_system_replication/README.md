@@ -41,3 +41,27 @@ Analysis: this branch does not yet have a `qdrant`-specific `analyze.py`
 `../replica_recall/run_experiment.py`'s output, so `../replica_recall/analyze.py`
 is the starting point once results directories are pointed at each other,
 but has not been adapted or run against Qdrant output on this branch.
+
+## Running a sweep
+
+**Use `qdrant_sweep.py`.** It clears `results/` before each run, checks the exit
+status, checks `samples.csv` was actually produced, and *moves* rather than
+copies -- so a failed run yields a `FAILED` line and no directory, instead of
+leaving the previous run's output to be picked up as fresh.
+
+That matters more than it sounds. During #24 a hand-written bash loop was used
+instead, a dead Docker daemon failed all 15 runs, and the loop copied one stale
+predecessor 15 times into 15 differently-named directories. Nothing was
+committed, but the data was internally consistent and looked real; it was caught
+only because identical inputs produced identical outputs. The sweep tool would
+have refused at the first run.
+
+If a sweep needs conditions `qdrant_sweep.py` does not express -- its own are the
+fixed `baseline`/`chaos`/`quiesce` triple -- extend it rather than replacing it
+with a loop. It already forwards unrecognised flags to
+`qdrant_run_experiment.py` via `parse_known_args`.
+
+For a single run, `qdrant_run_experiment.py --out-dir DIR` writes that run's
+output to its own directory, and every `run_meta.json` carries `run_id`,
+`started_at` and `argv` so output can be checked against what was requested
+without remembering it.
