@@ -35,8 +35,12 @@ INDEX = os.path.join(HERE, "README.md")
 # someone makes on purpose, and it shows up in review as one.
 EXEMPT = {
     "__pycache__",
-    "proto",  # generated gRPC stubs, vendored under an experiment
 }
+# Only TOP-LEVEL entries of research/ are enumerated, so a vendored directory
+# nested inside an experiment (research/cross_system_replication/proto, say)
+# never reaches this set and must not be listed here -- an inert exemption
+# tells a future reader that a top-level directory exists or might, and would
+# silently exempt one if it were ever created.
 
 
 def research_dirs():
