@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import datetime
 import json
 import os
 import random
@@ -39,6 +40,7 @@ import subprocess
 import sys
 import threading
 import time
+import uuid
 from concurrent.futures import ThreadPoolExecutor
 
 import numpy as np
@@ -58,6 +60,13 @@ from metrics import (                                             # noqa: E402
 import sift                                                       # noqa: E402
 
 RESULTS_DIR = os.path.join(HERE, "results")
+
+# Files this script owns in its output directory. Listed explicitly so startup
+# can clear them: a failed run must not leave the PREVIOUS run's output sitting
+# there looking current. Issue #26 -- a dead Docker daemon once caused 15 runs to
+# fail and a sweep to copy one stale predecessor 15 times, producing directories
+# of plausible-looking data belonging to an unrelated experiment.
+OUTPUT_FILES = ("samples.csv", "events.json", "run_meta.json", "telemetry.csv")
 PROTO_DIR = os.path.join(HERE, "proto")
 
 
@@ -456,6 +465,11 @@ def main() -> int:
     ap.add_argument("--batch-size", type=int, default=32,
                     help="points per REST upsert call (writer efficiency "
                          "only, does not change what is measured)")
+    ap.add_argument("--out-dir", default=None,
+                    help="where to write samples.csv/events.json/run_meta.json "
+                         "(default: this script's results/). A sweep should give "
+                         "each run its own directory, so a failed run leaves no "
+                         "output rather than leaving its predecessor's -- see #26.")
     ap.add_argument("--capture-telemetry", action="store_true",
                     help="experiment/qdrant-optimizer-masking-index-recall "
                          "(issue #8): poll each node's indexed_vectors_count/"
@@ -476,7 +490,23 @@ def main() -> int:
     probe_mod.ensure_stubs(PROTO_DIR)
 
     random.seed(args.seed)
-    os.makedirs(RESULTS_DIR, exist_ok=True)
+
+    # Resolve the output directory and CLEAR any output this script owns before
+    # doing anything else. Both halves matter (#26): a per-run --out-dir means a
+    # failed run leaves no directory to mistake for a result, and clearing means
+    # that even when runs share one directory, a failure cannot leave the
+    # previous run's files behind to be copied as fresh.
+    args.run_id = uuid.uuid4().hex[:12]
+    args.run_started_iso = datetime.datetime.now(
+        datetime.timezone.utc).isoformat()
+    # abspath: a relative --out-dir must mean the same place whether the caller
+    # is qdrant_sweep.py (cwd = repo root) or a hand in this directory.
+    args.results_dir = results_dir = os.path.abspath(args.out_dir or RESULTS_DIR)
+    os.makedirs(results_dir, exist_ok=True)
+    for name in OUTPUT_FILES:
+        stale = os.path.join(results_dir, name)
+        if os.path.exists(stale):
+            os.remove(stale)
 
     writer = RetainingWriter(topo.VECTOR_DIM, args.seed, dist=args.dist,
                              sift_dir=args.sift_dir, sift_vectors=args.sift_vectors,
@@ -626,7 +656,7 @@ def _run_experiment_body(args, writer, queries, node_ids) -> int:
         print(f"[qrr] note: sampler emitted columns missing from the canonical "
               f"list, appending: {', '.join(extra)}")
         cols = cols + extra
-    csv_path = os.path.join(RESULTS_DIR, "samples.csv")
+    csv_path = os.path.join(args.results_dir, "samples.csv")
     with open(csv_path, "w", newline="") as f:
         w = csv.DictWriter(f, fieldnames=cols)
         w.writeheader()
@@ -635,12 +665,12 @@ def _run_experiment_body(args, writer, queries, node_ids) -> int:
             r["t_rel"] = round(r.pop("t") - t_start, 3)
             w.writerow(r)
 
-    with open(os.path.join(RESULTS_DIR, "events.json"), "w") as f:
+    with open(os.path.join(args.results_dir, "events.json"), "w") as f:
         json.dump([{**e, "t_rel": round(e["t"] - t_start, 3)} for e in chaos_events],
                   f, indent=2)
 
     if args.capture_telemetry:
-        with open(os.path.join(RESULTS_DIR, "telemetry.csv"), "w", newline="") as f:
+        with open(os.path.join(args.results_dir, "telemetry.csv"), "w", newline="") as f:
             w = csv.DictWriter(f, fieldnames=["t_rel", "node", "indexed_vectors_count",
                                               "points_count", "segments_count",
                                               "status", "optimizer_status"])
@@ -685,8 +715,16 @@ def _run_experiment_body(args, writer, queries, node_ids) -> int:
         "telemetry_captured": args.capture_telemetry,
         "telemetry_rows": len(telemetry_rows) if args.capture_telemetry else None,
         "telemetry_errors": telemetry_errors[:20] if args.capture_telemetry else None,
+        # Provenance (#26). run_id is unique per invocation, so two runs can
+        # never produce identical metadata even with identical parameters --
+        # which is what made the 15 duplicated directories hard to spot.
+        # argv records what was actually asked for, so output can be checked
+        # against the request without the consumer remembering it.
+        "run_id": args.run_id,
+        "started_at": args.run_started_iso,
+        "argv": sys.argv[1:],
     }
-    with open(os.path.join(RESULTS_DIR, "run_meta.json"), "w") as f:
+    with open(os.path.join(args.results_dir, "run_meta.json"), "w") as f:
         json.dump(meta, f, indent=2)
 
     print(f"[qrr] {len(rows)} samples, {len(chaos_events)} chaos events, "
