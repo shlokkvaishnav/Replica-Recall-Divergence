@@ -239,6 +239,14 @@ starts:
    skipping the most downstream thing there was. If the claimed issue is
    stale (no branch, no commits, no running process for it), un-assign it
    and relabel `stage:proposed` so query 3 picks it up honestly.
+2c. Else, if **`gh pr list --label stage:approved-pending-merge`** returns
+   **more than one** PR → idle for this tick (log it as condition 5, with the
+   PR numbers). Merge is manual, so every branch started while PRs wait has
+   to be stacked on the newest of them — #31 on #29, #33 on #31 happened in
+   one night — and each human merge then retargets the whole stack. Two deep
+   is the most that has been shown to retarget cleanly; the queries below
+   resume the moment the human merges. This does not stop query 0, 1, 2 or
+   2b: reviews and revisions of work already in flight continue.
 3. Else, **`gh issue list --label stage:proposed --json number,assignees -q '.[] | select(.assignees | length == 0) | .number'`** returns
    anything → play **Implementer** on the oldest unclaimed issue. (An
    earlier version used `--assignee ""`, which in current `gh` returns
