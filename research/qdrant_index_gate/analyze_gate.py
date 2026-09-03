@@ -7,8 +7,12 @@ telemetry.csv) and computes SPEC.md's metrics per run:
 
   primary
     gate_close_s      seconds the gate took to close after writers paused
-    base_frac_1p0     fraction of BASELINE-window telemetry samples where the
-                      worst replica is 1.0 indexed
+    base_frac_0p95    fraction of BASELINE-window telemetry samples where the
+                      worst replica is >= the gate bar (1 - tol; 0.95 in the
+                      sweep, SPEC.md Amendment 1). base_frac_1p0 is kept as
+                      the pre-amendment column.
+    gate_fail_mode    for a gate that never closed: never-indexed (below the
+                      segment threshold) or plateau@f (appendable-segment tail)
     chaos_frac_0p95   fraction of CHAOS-window samples where the worst replica
                       is >= 0.95 indexed (None for --no-chaos runs)
   secondary
@@ -113,12 +117,20 @@ def analyze_run(d: str) -> dict | None:
         float(g.get("elapsed_s") or 0) + 1e6  # open-ended upper bound
     t0 = float(g.get("gate_closed_rel") or meta.get("warmup_s") or 0)
     cs, ce = meta.get("chaos_start_rel"), meta.get("chaos_stop_rel")
+    # SPEC.md Amendment 1: the gate bar is 1 - tol (0.95 in the sweep), not
+    # 1.0 -- Qdrant's appendable segment keeps 1.0 unreachable while writes
+    # flow. base_frac_0p95 is the primary baseline metric; base_frac_1p0 is
+    # kept as the pre-amendment column so the change is visible, not hidden.
+    bar = 1.0 - float(g.get("tol") or 0.0) if g else 0.95
+    out["gate_bar"] = round(bar, 4)
     if meta.get("chaos") and cs is not None:
-        out["base_frac_1p0"], out["base_n"] = window_fraction(samples, t0, cs, 1.0)
+        out["base_frac_0p95"], out["base_n"] = window_fraction(samples, t0, cs, bar)
+        out["base_frac_1p0"], _ = window_fraction(samples, t0, cs, 1.0)
         out["chaos_frac_0p95"], out["chaos_n"] = window_fraction(samples, cs, ce or end, 0.95)
         out["chaos_frac_1p0"], _ = window_fraction(samples, cs, ce or end, 1.0)
     else:
-        out["base_frac_1p0"], out["base_n"] = window_fraction(samples, t0, end, 1.0)
+        out["base_frac_0p95"], out["base_n"] = window_fraction(samples, t0, end, bar)
+        out["base_frac_1p0"], _ = window_fraction(samples, t0, end, 1.0)
         out["chaos_frac_0p95"], out["chaos_n"] = None, 0
     out["min_frac_overall"] = min((f for _, f in samples), default=None)
 
@@ -170,7 +182,8 @@ def main() -> int:
         print("no runs found")
         return 1
     cols = ["run", "threshold_kb", "sift_vectors", "chaos", "gated", "gate_closed",
-            "gate_close_s", "gate_fail_mode", "base_frac_1p0", "base_n",
+            "gate_close_s", "gate_fail_mode", "gate_bar", "base_frac_0p95",
+            "base_frac_1p0", "base_n",
             "chaos_frac_0p95", "chaos_n", "min_frac_overall", "probe_s_median",
             "reindex_s"]
     print("\t".join(cols))
@@ -185,13 +198,13 @@ def main() -> int:
     for thr in sorted({r["threshold_kb"] for r in gated}, key=lambda x: (x is None, x)):
         rs = [r for r in gated if r["threshold_kb"] == thr]
         cl = [r["gate_close_s"] for r in rs if r["gate_closed"]]
-        base = [r["base_frac_1p0"] for r in rs if r.get("base_frac_1p0") is not None]
+        base = [r["base_frac_0p95"] for r in rs if r.get("base_frac_0p95") is not None]
         chaos = [r["chaos_frac_0p95"] for r in rs if r.get("chaos_frac_0p95") is not None]
         modes = sorted({r.get("gate_fail_mode") for r in rs if not r["gate_closed"]} - {None})
         print(f"  threshold {thr!s:>7}: {len(cl)}/{len(rs)} closed"
               f"{' (fail: ' + ', '.join(modes) + ')' if modes else ''}, "
               f"close_s range {min(cl) if cl else None}-{max(cl) if cl else None}, "
-              f"baseline@1.0 range {min(base) if base else None}-{max(base) if base else None}, "
+              f"baseline@bar range {min(base) if base else None}-{max(base) if base else None}, "
               f"chaos@0.95 range {min(chaos) if chaos else None}-{max(chaos) if chaos else None}")
     return 0
 
