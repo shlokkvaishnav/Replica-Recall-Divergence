@@ -1,0 +1,41 @@
+{
+  "closed": false,
+  "elapsed_s": 600.543,
+  "polls": null,
+  "tol": 0.05,
+  "consecutive": 3,
+  "timeout_s": 600.0,
+  "min_fraction_at_end": 0.0,
+  "last_reason": "node 0 indexed 0.0000 < 0.9500 (0/66816)",
+  "per_node_at_end": {
+    "0": {
+      "indexed": 0,
+      "points": 66816,
+      "fraction": 0.0,
+      "segments": 4,
+      "status": "green",
+      "optimizer_status": "ok",
+      "reachable": true
+    },
+    "1": {
+      "indexed": 0,
+      "points": 66816,
+      "fraction": 0.0,
+      "segments": 4,
+      "status": "green",
+      "optimizer_status": "ok",
+      "reachable": true
+    },
+    "2": {
+      "indexed": 0,
+      "points": 66816,
+      "fraction": 0.0,
+      "segments": 4,
+      "status": "green",
+      "optimizer_status": "ok",
+      "reachable": true
+    }
+  },
+  "gate_opened_rel": 40.009,
+  "gate_closed_rel": 640.553
+}

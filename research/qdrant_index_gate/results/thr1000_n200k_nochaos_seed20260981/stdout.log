@@ -1,0 +1,34 @@
+[sift] cached  sift_base.fvecs (181 MB)
+[sift] cached  sift_query.fvecs (5 MB)
+[qrr] bringing up 3-node Qdrant cluster (2x3, image=qdrant/qdrant@sha256:057ee3a8da769fe7310dd3537b4dc7583bf87a95ce8ac43c0af5a46bc580d1fc)...
+[qrr] cluster ready, collection created, shards Active
+[qrr] warmup 40s (writing, no faults)...
+[qrr] warmup extended: 56864/200000 written at t=40s
+[qrr] warmup extended: 67168/200000 written at t=50s
+[qrr] warmup extended: 75456/200000 written at t=60s
+[qrr] warmup extended: 82784/200000 written at t=70s
+[qrr] warmup extended: 90848/200000 written at t=80s
+[qrr] warmup extended: 97280/200000 written at t=90s
+[qrr] warmup extended: 101216/200000 written at t=100s
+[qrr] warmup extended: 104256/200000 written at t=110s
+[qrr] warmup extended: 107392/200000 written at t=121s
+[qrr] warmup extended: 112192/200000 written at t=131s
+[qrr] warmup extended: 125024/200000 written at t=141s
+[qrr] warmup extended: 137440/200000 written at t=151s
+[qrr] warmup extended: 147968/200000 written at t=161s
+[qrr] warmup extended: 157216/200000 written at t=171s
+[qrr] warmup extended: 167104/200000 written at t=181s
+[qrr] warmup extended: 174176/200000 written at t=191s
+[qrr] warmup extended: 182592/200000 written at t=201s
+[qrr] warmup extended: 192768/200000 written at t=211s
+[qrr] warmup reached 200416 confirmed writes at t=219.9s
+[qrr] index gate: writers paused, waiting for every replica indexed >= 0.9500 (3 consecutive polls, timeout 600s)...
+[qrr] [gate]    11s  min indexed fraction 0.9600  (node 0 status='yellow')
+[qrr] [gate]    21s  min indexed fraction 1.0000  (node 0 status='yellow')
+[qrr] [gate] closed after 22.1s: every replica indexed >= 0.9500 for 3 consecutive polls
+[qrr] index gate closed at t=242.0s; writers resumed
+[qrr] baseline (no chaos), running 120s...
+[qrr] 66 samples, 0 chaos events, 273088 vectors confirmed
+[qrr] wrote C:\Users\shlok\OneDrive\Documents\Projects\Replica-Recall-Divergence\research\qdrant_index_gate\results\thr1000_n200k_nochaos_seed20260981\samples.csv
+
+[qrr] teardown...

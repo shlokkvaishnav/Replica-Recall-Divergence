@@ -198,16 +198,22 @@ def wait_for_cluster_formed(node_ids, timeout_s: float = 60) -> bool:
     return False
 
 
-def create_collection(node: int = 0) -> bool:
+def create_collection(node: int = 0, indexing_threshold_kb: int | None = None) -> bool:
+    body = {
+        "vectors": {"size": VECTOR_DIM, "distance": "Euclid"},
+        "shard_number": NUM_SHARDS,
+        "replication_factor": REPLICAS_PER_SHARD,
+        "write_consistency_factor": 1,
+    }
+    # Issue #28: Qdrant only builds HNSW for a segment once it exceeds
+    # optimizers_config.indexing_threshold (KB; Qdrant's default is 20000,
+    # ~40k 128-d float vectors). Left unset unless asked, so every existing
+    # run keeps Qdrant's default and the parameter shows up in run_meta.json
+    # only when a run deliberately changed it.
+    if indexing_threshold_kb is not None:
+        body["optimizers_config"] = {"indexing_threshold": int(indexing_threshold_kb)}
     status, _ = http_request(
-        http_port(node), "PUT", f"/collections/{COLLECTION}",
-        {
-            "vectors": {"size": VECTOR_DIM, "distance": "Euclid"},
-            "shard_number": NUM_SHARDS,
-            "replication_factor": REPLICAS_PER_SHARD,
-            "write_consistency_factor": 1,
-        },
-        timeout=10.0,
+        http_port(node), "PUT", f"/collections/{COLLECTION}", body, timeout=10.0,
     )
     return status == 200
 
