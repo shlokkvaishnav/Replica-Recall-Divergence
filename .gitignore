@@ -32,3 +32,5 @@ research/cross_system_replication/results/telemetry.csvresearch/qdrant_gated_ind
 research/qdrant_index_recall_healing/*.log
 research/qdrant_index_recall_healing/*.err
 research/qdrant_index_recall_healing/*.pid
+research/qdrant_chaos_loop_timeout/*.log
+research/qdrant_chaos_loop_timeout/*.err

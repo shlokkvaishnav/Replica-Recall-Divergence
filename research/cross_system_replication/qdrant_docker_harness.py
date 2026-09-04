@@ -221,14 +221,34 @@ def chaos_loop_scheduled(stop_evt, containers: dict, events: list,
             break
         name = step["target"]
         c = containers[name]
-        was_alive = c.is_alive()
         prev = last_restart_at.get(name)
         t0 = time.time()
-        c.kill()
-        if stop_evt.wait(step["down_for_s"]):
-            c.start()
-            break
-        alive = c.start()
+        # Issue #38, as in chaos_loop: a hung docker call raises inside this
+        # daemon thread and would otherwise end the schedule silently, part
+        # way through, with the remaining kills simply absent.
+        try:
+            was_alive = c.is_alive()
+            c.kill()
+            if stop_evt.wait(step["down_for_s"]):
+                c.start()
+                break
+            alive = c.start()
+        except Exception as e:  # noqa: BLE001 -- recorded, never swallowed
+            events.append({
+                "t": t0, "target": name, "alive_after_restart": None,
+                "down_for_s": step["down_for_s"], "restart_count": c.restart_count,
+                "condition": condition, "seq": step["seq"],
+                "requested_at_s": step["at_s"],
+                "realized_at_s": round(t0 - started, 3),
+                "requested_gap_s": step["gap_s"],
+                "realized_gap_s": (None if prev is None else round(t0 - prev, 3)),
+                "killed_while_down": None,
+                "failed": True, "error": repr(e),
+                "timed_out": isinstance(e, subprocess.TimeoutExpired),
+            })
+            print(f"[chaos] FAILED scheduled kill seq={step['seq']} of {name}: "
+                  f"{e!r} -- recorded, continuing", flush=True)
+            continue
         last_restart_at[name] = time.time()
         events.append({
             "t": t0,
@@ -244,6 +264,7 @@ def chaos_loop_scheduled(stop_evt, containers: dict, events: list,
             "requested_gap_s": step["gap_s"],
             "realized_gap_s": (None if prev is None else round(t0 - prev, 3)),
             "killed_while_down": not was_alive,
+            "failed": False,
         })
 
 
@@ -262,14 +283,35 @@ def chaos_loop(stop_evt, containers: dict, events: list,
         target = random.choice(names)
         c = containers[target]
         t0 = time.time()
-        c.kill()
-        down_for = random.uniform(min_down, max_down)
-        time.sleep(down_for)
-        if stop_evt.is_set():
-            c.start()
-            break
-        alive = c.start()
+        # Issue #38: every docker call here can raise -- ManagedContainer's
+        # subprocess.run carries timeout=30, so a hung daemon raises
+        # TimeoutExpired -- and this runs in a daemon thread, where an
+        # uncaught exception kills the loop SILENTLY: no event, no log, and
+        # a chaos window that simply produces nothing. That happened once
+        # (a quiesce run with zero events in a 127s window) and was caught
+        # only because an analyzer asked why a run had no kills. A failed
+        # kill is now an event of its own, so the record says what
+        # happened, and the loop continues to the next interval.
+        try:
+            c.kill()
+            down_for = random.uniform(min_down, max_down)
+            time.sleep(down_for)
+            if stop_evt.is_set():
+                c.start()
+                break
+            alive = c.start()
+        except Exception as e:  # noqa: BLE001 -- recorded, never swallowed
+            events.append({
+                "t": t0, "target": target, "alive_after_restart": None,
+                "down_for_s": None, "restart_count": c.restart_count,
+                "failed": True, "error": repr(e),
+                "timed_out": isinstance(e, subprocess.TimeoutExpired),
+            })
+            print(f"[chaos] FAILED kill/restart of {target}: {e!r} -- "
+                  f"recorded as a failed event, continuing", flush=True)
+            continue
         events.append({
             "t": t0, "target": target, "alive_after_restart": alive,
             "down_for_s": down_for, "restart_count": c.restart_count,
+            "failed": False,
         })

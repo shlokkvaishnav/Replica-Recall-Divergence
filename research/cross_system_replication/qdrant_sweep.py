@@ -21,6 +21,7 @@ skipped. Pass --force to redo everything.
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import shutil
 import subprocess
@@ -67,6 +68,23 @@ def run_one(seed: int, cond: str, duration: int, writers: int,
 
     if not os.path.exists(os.path.join(RESULTS_DIR, "samples.csv")):
         return False, f"seed {seed} {cond:<8} FAILED (no samples.csv produced)"
+
+    # Issue #38: a chaos run whose kills never happened is not a result. The
+    # runner records kill_count/chaos_no_kills; refuse the run here the same
+    # way a missing samples.csv is refused, so a sweep cannot quietly collect
+    # a condition that did not occur.
+    meta_p = os.path.join(RESULTS_DIR, "run_meta.json")
+    if cond != "baseline" and os.path.exists(meta_p):
+        try:
+            with open(meta_p) as f:
+                meta = json.load(f)
+        except Exception:
+            meta = {}
+        if meta.get("chaos_no_kills"):
+            return False, (f"seed {seed} {cond:<8} FAILED (chaos requested but no kill "
+                           f"completed; {meta.get('kill_failures', 0)} failed attempt(s), "
+                           f"window {meta.get('chaos_realized_s')}s vs requested "
+                           f"{meta.get('chaos_requested_s')}s -- issue #38)")
 
     shutil.rmtree(dest, ignore_errors=True)
     shutil.move(RESULTS_DIR, dest)
