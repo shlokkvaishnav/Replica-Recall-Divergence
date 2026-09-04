@@ -1,0 +1,83 @@
+  corpus distribution: sift (15 runs)
+==============================================================================
+Seed sweep -- baseline vs chaos
+==============================================================================
+  baseline runs : 5   seeds [20261000, 20261001, 20261002, 20261003, 20261004]
+  chaos runs    : 5   seeds [20261000, 20261001, 20261002, 20261003, 20261004]
+  quiesce runs  : 5   seeds [20261000, 20261001, 20261002, 20261003, 20261004]
+
+  metric                             baseline              chaos        p
+  ------------------------------------------------------------------------
+  within-shard spread       0.0016 +/- 0.0003  0.0226 +/- 0.0088  0.0079*
+    p95 spread              0.0034 +/- 0.0009  0.0791 +/- 0.0306  0.0079*
+  detector hit rate         0.5358 +/- 0.2227  0.8337 +/- 0.0757  0.1111 
+    rank correlation        0.1515 +/- 0.4198  0.5999 +/- 0.0914  0.0714 
+    true recall margin      0.0014 +/- 0.0002  0.0322 +/- 0.0149  0.0159*
+  index_recall              0.9924 +/- 0.0013  0.9904 +/- 0.0028  0.3095 
+  completeness              1.0000 +/- 0.0000  0.9932 +/- 0.0027  0.0079*
+  e2e_recall                0.9962 +/- 0.0008  0.9870 +/- 0.0043  0.0079*
+
+  Exact two-sided Mann-Whitney. With 5 vs 5 runs the smallest
+  attainable p is 0.0079 -- reaching it means the two groups
+  separate completely, not that the effect is enormous.
+
+==============================================================================
+Recall by index size, pooled across seeds
+==============================================================================
+          index size   baseline      chaos     delta       runs
+  --------------------------------------------------------------
+   47,500-50,000        0.9964     0.9875   -0.0089        5/5
+   50,000-52,500        0.9963     0.9948   -0.0015        5/5
+   52,500-55,000        0.9974     0.9878   -0.0096        5/5
+   55,000-57,500        0.9966     0.9858   -0.0108        5/5
+   57,500-60,000        0.9970     0.9884   -0.0085        5/5
+   60,000-62,500        0.9967     0.9800   -0.0167        4/5
+   62,500-65,000        0.9963     0.9894   -0.0069        5/5
+   65,000-67,500        0.9962     0.9875   -0.0087        5/5
+   67,500-70,000        0.9954     0.9921   -0.0033        5/4
+   70,000-72,500        0.9962     0.9914   -0.0048        4/5
+   72,500-75,000        0.9960     0.9954   -0.0005        5/3
+   75,000-77,500        0.9957       n/a       n/a         5/0
+   77,500-80,000        0.9954       n/a       n/a         5/0
+   80,000-82,500        0.9955       n/a       n/a         5/0
+   82,500-85,000        0.9955       n/a       n/a         4/0
+   85,000-87,500        0.9950       n/a       n/a         2/0
+   87,500-90,000        0.9961       n/a       n/a         3/0
+   90,000-92,500        0.9967       n/a       n/a         1/0
+   92,500-95,000        0.9967       n/a       n/a         1/0
+
+  mean size-matched delta: -0.0073 over 11 bins
+
+==============================================================================
+Healing -- quiesce runs (faults stopped mid-run)
+==============================================================================
+  Missing ids = (1 - completeness) * n_intended. The ratio alone
+  climbs through denominator growth as writes continue, so the
+  absolute count decides whether anything was actually recovered.
+
+        seed   miss@stop   miss@end   recovered   healed
+  --------------------------------------------------------
+    20261001        1576        695        56%       NO
+    20261002         153          0       100%      yes
+
+  mean missing when faults stopped :     864
+  mean missing at run end          :     347
+  mean recovered                   :   77.9%  (range 56% to 100%)
+
+  MIXED: healed in 1/2 runs. Worth understanding
+  what differs between them before claiming either way.
+
+==============================================================================
+Verdict
+==============================================================================
+  [yes] Replicas diverge more under failure than without it.
+  [yes] The detector picks the degraded replica well above chance under chaos (mean 0.834 vs chance 0.333, 4/5 runs scorable; undefined on baseline, where nothing is degraded to find).
+  [no ] index_recall does not separate -- no evidence the graph itself is damaged; the divergence would be pure data loss.
+  [yes] completeness separates -- some of the divergence is data loss too.
+
+  The current shape of the result is all four above reading [yes]:
+  replicas diverge, the detector sees it, the graph is damaged
+  independently of data loss, and some of the divergence is data
+  loss too. Any [no] is worth understanding before writing
+  anything up -- and if index_recall ever reads [no] again, that
+  is the earlier (refuted) hypothesis, not a regression.

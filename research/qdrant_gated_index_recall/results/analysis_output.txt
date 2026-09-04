@@ -1,0 +1,40 @@
+run 0 -- index_recall before vs after the gate, per replica:
+  shard-0-0: before 0.999000  after 0.999000  delta 0.0
+  shard-0-1: before 0.999000  after 0.999000  delta 0.0
+  shard-0-2: before 0.998000  after 0.998000  delta 0.0
+  shard-1-0: before 0.996000  after 0.996000  delta 0.0
+  shard-1-1: before 0.998000  after 0.998000  delta 0.0
+  shard-1-2: before 0.999000  after 0.999000  delta 0.0
+  original before/after prediction: DOES NOT HOLD (deltas [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]) -- uninformative when the gate closes at once; Amendment 1
+  Amendment 1 -- HNSW vs exact on the same post-gate state:
+    shard-0-0: hnsw 0.999000  exact 1.000000
+    shard-0-1: hnsw 0.999000  exact 1.000000
+    shard-0-2: hnsw 0.998000  exact 1.000000
+    shard-1-0: hnsw 0.996000  exact 1.000000
+    shard-1-1: hnsw 0.998000  exact 1.000000
+    shard-1-2: hnsw 0.999000  exact 1.000000
+    exact == 1.000 on every replica: YES;  HNSW < 1.000 on some replica: YES  -> graph traversed
+
+bar = 0.95   (per-round worst replica; conditioned = replicas >= bar indexed)
+cond      seed        gate   written   rounds  retained   uncond_mean  cond_mean  strict_mean(n)
+baseline  20261000   True    100672      12      0.92       0.9905     0.9906    0.9892(5)
+baseline  20261001   True    100032      13      0.77       0.9906     0.9918    0.9918(6)
+baseline  20261002   True    100640      12       1.0       0.9913     0.9913    0.9914(11)
+baseline  20261003   True    100224      11      0.55       0.9887       0.99      0.99(1)
+baseline  20261004   True    100096      11      0.73       0.9869     0.9875    0.9858(4)
+chaos     20261000   True    100128      13       1.0       0.9875     0.9875    0.9902(12)
+chaos     20261001   True    100224      13       1.0       0.9621     0.9624    0.9595(12)
+chaos     20261002   True    100672      13       1.0        0.981      0.981    0.9805(12)
+chaos     20261003   True    100000      12       1.0       0.9783     0.9783    0.9778(11)
+chaos     20261004   True    100096      13       1.0       0.9775     0.9825    0.9817(12)
+quiesce   20261000   True    100192       5       1.0       0.9674     0.9674    0.9674(5)
+quiesce   20261001   True    100480       6       1.0       0.9932     0.9932    0.9936(5)
+quiesce   20261002   True    100192       5       1.0       0.9862     0.9862    0.9862(5)
+quiesce   20261003   True    100352       5       1.0       0.9908     0.9908    0.9908(5)
+quiesce   20261004   True    100096       6       1.0       0.9872     0.9872    0.9858(5)
+
+CONDITIONED (decision metric): baseline mean 0.9903 (n=5) vs chaos mean 0.9783 (n=5)  U=25.0  p=0.0079
+unconditioned (what #6 saw): baseline mean 0.9896 (n=5) vs chaos mean 0.9773 (n=5)  U=24.0  p=0.0159
+strict (every replica >= bar; secondary): baseline mean 0.9896 (n=5) vs chaos mean 0.9779 (n=5)  U=22.0  p=0.0556
+retained sample fraction: baseline 0.55-1.00, chaos 1.00-1.00
+baseline conditioned index_recall spread: 0.9875-0.9918
