@@ -2,7 +2,7 @@
 
 Issue #35 · branch `experiment/qdrant-index-recall-healing` · README open question #1, healing.
 
-**Answer.** Yes — it is a transient of the restart. With PR #31's gated protocol and a 180s quiesce (≈36 post-chaos samples instead of #31's 4–5), the worst replica's `index_recall` is back inside its own baseline range over the last 60s in **4 of 4 judged seeds**. Only one seed showed any loss after its last kill (0.946 in the first 30s bin) and it was back by the next bin; in the other three the first post-kill bin was already at baseline. The fifth seed is **unmeasured**: its chaos window ran 127s on a 50s setting with zero kill events — a harness defect, kept and reported, not re-run. Completeness recovered 100% of missing ids in all four seeds (PR #6's 50s window had seen 0–100%). Full table, the noise-floor reading on the closest seed, and what is not established: [`SPEC.md`](SPEC.md).
+**Answer.** Yes — it is a transient of the restart. With PR #31's gated protocol and a 180s quiesce (≈36 post-chaos samples instead of #31's 4–5), the worst replica's `index_recall` is back inside its own baseline range over the last 60s in **4 of 4 judged seeds**. After the last kill, one seed dropped to 0.946 for one 30s bin, one dipped 0.003 for one bin, and two showed nothing beyond noise — every dip was gone by the next bin. The fifth seed is **unmeasured**: its chaos window ran 127s on a 50s setting with zero kill events — a harness defect, kept and reported, not re-run. Completeness recovered 100% of missing ids in all four seeds (PR #6's 50s window had seen 0–100%). Full table, the noise-floor reading on the closest seed, and what is not established: [`SPEC.md`](SPEC.md).
 
 ## What was built
 
