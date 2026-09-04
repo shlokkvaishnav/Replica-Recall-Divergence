@@ -34,9 +34,15 @@ RUN_DIR = os.path.join(HERE, "weaviate_run")
 COMPOSE_PATH = os.path.join(RUN_DIR, "docker-compose.yml")
 
 PROJECT = "rrd-weaviate"
-# Pinned by digest: async replication is GA from v1.29, and #41's Confounds
-# section requires the version be fixed and recorded.
-WEAVIATE_IMAGE = "cr.weaviate.io/semitechnologies/weaviate:1.29.0"
+# Pinned BY DIGEST (issue #46), not by tag. A tag can be repointed, and this
+# harness depends on an UNDOCUMENTED internal API (see
+# ../weaviate_nonperturbing_probe/), so "1.29.0" is not a specification of
+# anything a result can rest on. Re-derive with:
+#     docker image inspect cr.weaviate.io/semitechnologies/weaviate:1.29.0 #         --format '{{index .RepoDigests 0}}'
+# Pinning makes runs reproducible against one build; it does NOT make the
+# internal API a stability contract.
+WEAVIATE_IMAGE = ("cr.weaviate.io/semitechnologies/weaviate@sha256:"
+                  "4d2eceef34882b5e573ee77ef0e92423838583676f1cf0f054c186b36444b132")
 
 N_NODES = 3
 REPLICATION_FACTOR = 3
@@ -197,7 +203,36 @@ def create_class(node: int = 0, async_replication: bool = True) -> tuple[int, ob
         "shardingConfig": {"desiredCount": 1},
         "properties": [{"name": "vid", "dataType": ["text"]}],
     }
-    return http_request(http_port(node), "POST", "/v1/schema", body)
+    st, resp = http_request(http_port(node), "POST", "/v1/schema", body)
+    if st == 200:
+        return st, resp
+    # Issue #46: a 422 means the class already exists -- and NOT necessarily
+    # with this config. A stale class left by auto-schema had
+    # replicationConfig.factor 1 with shardingConfig.actualCount 3, i.e.
+    # SHARDED across the nodes rather than replicated onto all of them, so
+    # each node held a different subset and "what does replica N hold" was
+    # not even the right question. Tolerating 422 silently is how a run gets
+    # a topology its spec does not describe, so verify and say so.
+    got, _ = verify_class(node)
+    if got:
+        return 200, {"note": "class already existed with the expected config"}
+    return st, {"error": "class exists with a DIFFERENT config; delete it first",
+                "response": resp}
+
+
+def verify_class(node: int = 0) -> tuple[bool, dict]:
+    """(matches_expected, actual). Checks the two properties this project's
+    per-replica question depends on: replication factor over every node, and
+    exactly one shard, so all replicas name the same shard."""
+    st, sch = http_request(http_port(node), "GET", f"/v1/schema/{CLASS_NAME}")
+    if st != 200 or not isinstance(sch, dict):
+        return False, {"status": st}
+    rep = (sch.get("replicationConfig") or {})
+    shard = (sch.get("shardingConfig") or {})
+    actual = {"factor": rep.get("factor"), "asyncEnabled": rep.get("asyncEnabled"),
+              "shards": shard.get("actualCount")}
+    ok = (actual["factor"] == REPLICATION_FACTOR and actual["shards"] == 1)
+    return ok, actual
 
 
 def nodes_status(node: int = 0, verbose: bool = True):
