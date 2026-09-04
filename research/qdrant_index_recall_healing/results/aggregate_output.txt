@@ -1,0 +1,32 @@
+  corpus distribution: sift (10 runs)
+==============================================================================
+Seed sweep -- baseline vs chaos
+==============================================================================
+  baseline runs : 5   seeds [20261100, 20261101, 20261102, 20261103, 20261104]
+  chaos runs    : 0   seeds []
+  quiesce runs  : 5   seeds [20261100, 20261101, 20261102, 20261103, 20261104]
+
+  Need at least 2 baseline and 2 chaos runs for the
+  condition comparison. Run sweep.py.
+
+==============================================================================
+Healing -- quiesce runs (faults stopped mid-run)
+==============================================================================
+  Missing ids = (1 - completeness) * n_intended. The ratio alone
+  climbs through denominator growth as writes continue, so the
+  absolute count decides whether anything was actually recovered.
+
+        seed   miss@stop   miss@end   recovered   healed
+  --------------------------------------------------------
+    20261101         468          0       100%      yes
+    20261102          19          0       100%      yes
+    20261103         248          0       100%      yes
+    20261104          86          0       100%      yes
+
+  mean missing when faults stopped :     206
+  mean missing at run end          :       0
+  mean recovered                   :  100.0%  (range 100% to 100%)
+
+  HEALS in 4/4 runs -- completeness returns to
+  its pre-chaos level. The divergence is transient, and the
+  permanent-degradation claim does not hold.

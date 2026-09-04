@@ -57,12 +57,13 @@ def rounds_worst(samples_path, tele, bar, lo, hi):
         node = int(r["replica"])
         f = fraction_at(tele.get(node), t)
         rounds.setdefault(t, []).append((ir, comp, f))
-    out = []
+    out, unc = [], []
     for t, reps in sorted(rounds.items()):
+        unc.append((t, min(ir for ir, _, _ in reps)))
         ok = [ir for ir, _, f in reps if f is not None and f >= bar]
         if ok:
             out.append((t, min(ok), min(c for _, c, _ in reps)))
-    return out
+    return out, unc
 
 
 def analyze(results_dir, bar):
@@ -78,9 +79,10 @@ def analyze(results_dir, bar):
         t0 = float(g.get("gate_closed_rel") or meta.get("warmup_s") or 0)
         entry = per.setdefault(seed, {})
         if cond == "baseline":
-            rw = rounds_worst(os.path.join(p, "samples.csv"), tele, bar, t0, float("inf"))
+            rw, unc = rounds_worst(os.path.join(p, "samples.csv"), tele, bar, t0, float("inf"))
             vals = [v for _, v, _ in rw]
-            entry["baseline"] = {"n": len(vals), "min": min(vals) if vals else None,
+            entry["baseline"] = {"n": len(vals), "n_all": len(unc), "min": min(vals) if vals else None,
+                                 "unc_min": min(v for _, v in unc) if unc else None,
                                  "max": max(vals) if vals else None,
                                  "mean": statistics.mean(vals) if vals else None,
                                  "gate_closed": g.get("closed")}
@@ -89,12 +91,20 @@ def analyze(results_dir, bar):
             kills = sorted((float(e["t_rel"]), int(str(e["target"])[-1])) for e in ev)
             t_last = kills[-1][0] if kills else float(meta.get("chaos_stop_rel") or t0)
             t_end = float(meta.get("duration_s", 0)) + t0 + 1e9  # to the last sample
-            rw = rounds_worst(os.path.join(p, "samples.csv"), tele, bar, t_last, float("inf"))
+            rw, unc = rounds_worst(os.path.join(p, "samples.csv"), tele, bar, t_last, float("inf"))
+            if not kills:
+                # Randomized chaos fired nothing in this window: there is no
+                # loss to heal and the seed is UNMEASURED (SPEC alternative
+                # (iii)), not healed.
+                entry["quiesce"] = {"n_post": len(rw), "kills": [], "unmeasured": "no kills in the chaos window"}
+                continue
             if not rw:
                 entry["quiesce"] = {"n_post": 0, "kills": kills}
                 continue
             t_max = max(t for t, _, _ in rw)
             last = [(v, c) for t, v, c in rw if t >= t_max - LAST_S]
+            unc_last = [v for t, v in unc if t >= t_max - LAST_S]
+            bin0 = [v for t, v, _ in rw if t - t_last < BIN_S]
             bins = {}
             for t, v, c in rw:
                 bins.setdefault(int((t - t_last) // BIN_S), []).append(v)
@@ -111,6 +121,9 @@ def analyze(results_dir, bar):
                 "last60_mean": statistics.mean(v for v, _ in last),
                 "last60_min": min(v for v, _ in last),
                 "last60_compl": min(c for _, c in last),
+                "n_post_all": len(unc), "retained": len(rw) / len(unc) if unc else None,
+                "unc_last60_mean": statistics.mean(unc_last) if unc_last else None,
+                "bin0_mean": statistics.mean(bin0) if bin0 else None,
                 "bins": bin_means,
                 "killed_frac_bins": [(k * BIN_S, round(min(v), 3)) for k, v in sorted(kf.items())],
                 "gate_closed": g.get("closed"),
@@ -132,6 +145,9 @@ def main() -> int:
     healed = 0; judged = 0
     for seed, e in sorted(per.items()):
         b, q = e.get("baseline"), e.get("quiesce")
+        if q and q.get("unmeasured"):
+            print(f"{seed}  UNMEASURED: {q['unmeasured']} (post rounds {q['n_post']})")
+            continue
         if not b or not q or not q.get("n_post"):
             print(f"{seed}  incomplete: baseline={'yes' if b else 'no'} quiesce_post_n={q.get('n_post') if q else 'no run'}")
             continue
@@ -143,12 +159,16 @@ def main() -> int:
             if mval >= b["min"] and all(m2 >= b["min"] for _, m2, _ in bm[i:]):
                 t_to = t; break
         print(f"{seed}  {b['n']:>6}  {b['min']:.4f}    {b['max']:.4f}   | {q['n_post']:>6}  {q['last60_mean']:.4f}       {q['last60_min']:.4f}      {'yes' if ok else 'NO ':<4}   {('never' if t_to is None else str(int(t_to))):>6}      {q['last60_compl']:.4f}")
+        loss = (q["bin0_mean"] is not None and q["bin0_mean"] < b["min"])
+        print(f"            post-window retention {q['retained']:.2f} ({q['n_post']}/{q['n_post_all']} rounds); unconditioned last60 mean {q['unc_last60_mean']:.4f}; "
+              f"bin0 mean {q['bin0_mean']:.4f} -> {'LOSS visible after last kill' if loss else 'no loss visible after last kill'}")
         print("            bins: " + "  ".join(f"{int(t)}s:{m:.3f}(n{n})" for t, m, n in bm))
         print("            killed-node indexed frac by bin: " + "  ".join(f"{int(t)}s:{f}" for t, f in q["killed_frac_bins"]))
         print(f"            kills: {[(round(t,1), n) for t, n in q['kills']]}")
     print()
     if judged:
-        print(f"healed on this horizon (last60 mean >= own baseline min): {healed}/{judged}"
+        unm = sum(1 for e in per.values() if e.get("quiesce", {}).get("unmeasured"))
+        print(f"healed on this horizon (last60 mean >= own baseline min): {healed}/{judged} judged; {unm} seed(s) unmeasured (no kills)"
               + ("  -> outcome (a)/(b) territory" if healed >= 4 else ("  -> outcome (c): persistent in >=2/5" if judged - healed >= 2 else "")))
     return 0
 
