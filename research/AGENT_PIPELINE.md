@@ -215,9 +215,17 @@ starts:
    in `research/README.md`'s experiment index (a row still reading "In
    progress" after its PR merged is the defect #15 found and #25
    re-created). If it does not hold, the human merged a different head than
-   was reviewed: comment on the PR naming both SHAs, label it
-   `stage:changes-requested`, and stop — the implementer role re-lands the
-   difference as #19 did for #18. This query exists because the pipeline
+   was reviewed — or merged a stacked PR into its stack base instead of
+   `main`: comment on the PR naming both SHAs, label it
+   `stage:changes-requested`, and re-land as #19 did for #18. Fired for
+   real on 2026-09-04: #31 and #33 were merged 13 and 32 seconds after
+   #29, into `method/qdrant-index-gate` and
+   `experiment/qdrant-gated-index-recall`; `main` got #29 only. GitHub
+   retargets a stacked PR to the next base **only when the merged base
+   branch is deleted**. So the instruction to the human for a stack is:
+   merge bottom-up, **tick "delete branch" on each merge**, and wait for
+   the next PR's base to read `main` before merging it — or the reviewer
+   re-lands the whole stack as one PR from its top (#34). This query exists because the pipeline
    otherwise has no check that what reached `main` is what was reviewed,
    which #19 pointed out and which stayed unimplemented for a day.
 1. **`gh pr list --label stage:in-review`** returns anything → play
