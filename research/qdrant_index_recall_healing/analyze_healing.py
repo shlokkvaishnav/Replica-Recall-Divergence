@@ -142,7 +142,7 @@ def main() -> int:
         for i, (t, mval, _) in enumerate(bm):
             if mval >= b["min"] and all(m2 >= b["min"] for _, m2, _ in bm[i:]):
                 t_to = t; break
-        print(f"{seed}  {b['n']:>6}  {b['min']:.4f}    {b['max']:.4f}   | {q['n_post']:>6}  {q['last60_mean']:.4f}       {q['last60_min']:.4f}      {'yes' if ok else 'NO ':<4}   {t_to if t_to is None else int(t_to):>6}      {q['last60_compl']:.4f}")
+        print(f"{seed}  {b['n']:>6}  {b['min']:.4f}    {b['max']:.4f}   | {q['n_post']:>6}  {q['last60_mean']:.4f}       {q['last60_min']:.4f}      {'yes' if ok else 'NO ':<4}   {('never' if t_to is None else str(int(t_to))):>6}      {q['last60_compl']:.4f}")
         print("            bins: " + "  ".join(f"{int(t)}s:{m:.3f}(n{n})" for t, m, n in bm))
         print("            killed-node indexed frac by bin: " + "  ".join(f"{int(t)}s:{f}" for t, f in q["killed_frac_bins"]))
         print(f"            kills: {[(round(t,1), n) for t, n in q['kills']]}")
