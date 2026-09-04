@@ -889,6 +889,20 @@ def _run_experiment_body(args, writer, queries, node_ids) -> int:
         "vector_dim": topo.VECTOR_DIM,
         "samples": len(rows),
         "chaos_events": len(chaos_events),
+        # Issue #38: a chaos run that produced no kills, or whose window ran
+        # far past what was asked, is a run whose chaos did not happen the way
+        # it was requested -- and used to be indistinguishable from a healthy
+        # one except by noticing events.json was empty. These say so directly,
+        # so a sweep driver or analyzer can refuse the run.
+        "kill_count": sum(1 for e in chaos_events if not e.get("failed")),
+        "kill_failures": sum(1 for e in chaos_events if e.get("failed")),
+        "chaos_no_kills": (args.no_chaos is False and
+                           not any(not e.get("failed") for e in chaos_events)),
+        "chaos_requested_s": (None if args.no_chaos else
+                              (args.chaos_duration if args.chaos_duration is not None
+                               else args.duration)),
+        "chaos_realized_s": (None if chaos_start_rel is None or chaos_stop_rel is None
+                             else round(chaos_stop_rel - chaos_start_rel, 3)),
         "confirmed_total": len(writer.vector_of),
         "write_attempted": writer.attempted,
         "write_failed": writer.failed,
@@ -917,6 +931,15 @@ def _run_experiment_body(args, writer, queries, node_ids) -> int:
     with open(os.path.join(args.results_dir, "run_meta.json"), "w") as f:
         json.dump(meta, f, indent=2)
 
+    n_ok = sum(1 for e in chaos_events if not e.get("failed"))
+    n_bad = len(chaos_events) - n_ok
+    if not args.no_chaos and n_ok == 0:
+        print(f"[qrr] WARNING: chaos was requested but NO kill completed "
+              f"({n_bad} failed attempt(s)). run_meta.chaos_no_kills is true; "
+              f"this run measured no chaos (issue #38).", file=sys.stderr)
+    elif n_bad:
+        print(f"[qrr] WARNING: {n_bad} kill attempt(s) failed and are recorded "
+              f"as failed events (issue #38).", file=sys.stderr)
     print(f"[qrr] {len(rows)} samples, {len(chaos_events)} chaos events, "
           f"{len(writer.vector_of)} vectors confirmed")
     if sampler_errors:
