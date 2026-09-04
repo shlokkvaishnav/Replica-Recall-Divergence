@@ -1,0 +1,25 @@
+bar = 0.95; worst replica per round, conditioned; bins of 30s after the LAST kill; primary = last 60s
+seed        base n  base min  base max | post n  last60 mean  last60 min  healed  t_to_base  last60 compl
+20261100  UNMEASURED: no kills in the chaos window (post rounds 12)
+20261101       7  0.9830    0.9920   |      4  0.9900       0.9900      yes         0      1.0000
+            post-window retention 0.29 (4/14 rounds); unconditioned last60 mean 0.9870; bin0 mean 0.9925 -> no loss visible after last kill
+            bins: 0s:0.992(n2)  30s:0.983(n1)  90s:0.990(n1)
+            killed-node indexed frac by bin: 0s:0.906  30s:0.918  60s:0.912  90s:0.919  120s:0.899  150s:0.911  180s:0.923
+            kills: [(167.0, 1), (186.9, 1), (204.2, 0)]
+20261102      13  0.9870    0.9940   |     14  0.9930       0.9910      yes       120      1.0000
+            post-window retention 0.88 (14/16 rounds); unconditioned last60 mean 0.9898; bin0 mean 0.9903 -> no loss visible after last kill
+            bins: 0s:0.990(n3)  30s:0.989(n2)  60s:0.991(n3)  90s:0.986(n2)  120s:0.989(n1)  150s:0.992(n2)  180s:0.994(n1)
+            killed-node indexed frac by bin: 0s:0.926  30s:0.915  60s:0.961  90s:0.956  120s:0.93  150s:0.925  180s:0.937
+            kills: [(172.2, 0), (189.3, 2), (202.0, 2)]
+20261103      18  0.9900    0.9980   |     15  0.9937       0.9930      yes        60      1.0000
+            post-window retention 0.88 (15/17 rounds); unconditioned last60 mean 0.9916; bin0 mean 0.9923 -> no loss visible after last kill
+            bins: 0s:0.992(n3)  30s:0.987(n3)  60s:0.991(n2)  90s:0.995(n3)  120s:0.995(n3)  180s:0.993(n1)
+            killed-node indexed frac by bin: 0s:0.955  30s:0.91  60s:0.922  90s:0.939  120s:0.961  150s:0.931  180s:0.942
+            kills: [(123.7, 0), (133.4, 2), (145.3, 0), (158.6, 2)]
+20261104      10  0.9860    0.9940   |     17  0.9862       0.9850      yes     never      1.0000
+            post-window retention 1.00 (17/17 rounds); unconditioned last60 mean 0.9852; bin0 mean 0.9457 -> LOSS visible after last kill
+            bins: 0s:0.946(n3)  30s:0.988(n3)  60s:0.986(n3)  90s:0.985(n2)  120s:0.986(n2)  150s:0.986(n3)  180s:0.985(n1)
+            killed-node indexed frac by bin: 0s:0.956  30s:0.923  60s:0.936  90s:0.933  120s:0.943  150s:0.938  180s:0.945
+            kills: [(120.1, 1), (130.8, 1), (145.9, 0)]
+
+healed on this horizon (last60 mean >= own baseline min): 4/4 judged; 1 seed(s) unmeasured (no kills)  -> outcome (a)/(b) territory
