@@ -46,6 +46,11 @@ VECTOR_DIM = 128
 HTTP_BASE = 8080          # host port for node 0; node n -> HTTP_BASE + n
 GRPC_BASE = 50151
 CLUSTER_BASE = 7100
+# Issue #43: the inter-node replication API listens on CLUSTER_DATA_BIND_PORT
+# and is NOT served on the main HTTP port (checked: /replicas/... and
+# /indices/... 404 there). Publishing it is what lets a probe ask one replica
+# for its own state without stopping its peers.
+INTERNAL_BASE = 7947
 
 
 def node_service_name(n: int) -> str:
@@ -62,6 +67,11 @@ def http_port(n: int) -> int:
 
 def grpc_port(n: int) -> int:
     return GRPC_BASE + n
+
+
+def internal_port(n: int) -> int:
+    """Host port for node n's CLUSTER_DATA_BIND_PORT (issue #43)."""
+    return INTERNAL_BASE + n
 
 
 def _write_yaml(path: str, obj) -> None:
@@ -129,6 +139,7 @@ def write_compose_file() -> None:
             "ports": [
                 f"{http_port(n)}:8080",
                 f"{grpc_port(n)}:50051",
+                f"{internal_port(n)}:7947",   # issue #43
             ],
             "volumes": [f"{PROJECT}-data{n}:/var/lib/weaviate"],
         }
