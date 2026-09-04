@@ -28,4 +28,4 @@ research/replica_recall/forensics_results.json
 research/cross_system_replication/results/samples.csv
 research/cross_system_replication/results/events.json
 research/cross_system_replication/results/run_meta.json
-research/cross_system_replication/results/telemetry.csv
+research/cross_system_replication/results/telemetry.csvresearch/qdrant_gated_index_recall/*.log
