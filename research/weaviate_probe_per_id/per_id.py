@@ -137,12 +137,29 @@ def validate() -> int:
     if first is None:
         check("node2 answered after restart", False, "never answered")
     else:
+        # #46 pre-registered SET EQUALITY against a constructed expectation.
+        # The complication -- and the reason an earlier version of this file
+        # weakened the assertion to a superset check, which PR #47's review
+        # caught -- is that the peer-only ids converge at an unpredictable
+        # moment, so "the expectation" is only defined either side of that,
+        # not across it. It is defined at two moments, and equality is
+        # asserted at both:
+        #   before convergence: the mix is exactly the always-written ids
+        #   after  convergence: exactly always-written + peer-only
+        # Never absent ids, at either moment.
         print(f"   node2's first answer after restart: {len(first)}/{len(PEERONLY)} peer-only ids")
         ok_mix, mix = objects_present_ids(2, shard, PRESENT + ABSENT + PEERONLY)
+        converged = len(mix & set(PEERONLY)) == len(PEERONLY)
+        expected = set(PRESENT) | (set(PEERONLY) if converged else set())
         print(f"   mixed request: present={len(mix & set(PRESENT))}/{len(PRESENT)} "
-              f"absent={len(mix & set(ABSENT))} peer_only={len(mix & set(PEERONLY))}/{len(PEERONLY)}")
-        check("the mix still finds every always-written id", mix >= set(PRESENT))
-        check("the mix still finds no never-written id", not (mix & set(ABSENT)))
+              f"absent={len(mix & set(ABSENT))} peer_only={len(mix & set(PEERONLY))}/{len(PEERONLY)} "
+              f"({'post' if converged else 'pre'}-convergence)")
+        check("the mix EQUALS the constructed expectation (#46's decision metric)",
+              mix == expected,
+              f"unexpected {sorted(mix - expected)[:3]}, missing {sorted(expected - mix)[:3]}")
+        if not converged:
+            check("pre-convergence: no peer-only id is reported", not (mix & set(PEERONLY)))
+        check("the mix finds no never-written id", not (mix & set(ABSENT)))
 
     print("\n4. cross-check against #43's size-based probe")
     okA, sizeA = ia.objects_present(0, shard, PRESENT)

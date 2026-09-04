@@ -92,8 +92,10 @@ Each object carries its id as **16 bytes big-endian** near the start of its reco
 | **no never-written id found** — the always-succeeds trap | pass, 0 false positives |
 | a peer that received peer-only writes reports them (10/10) | pass |
 | a **stopped** node returns `ok=False` rather than an answer | pass |
-| the mixed request still finds all present and no absent ids | pass |
+| **the mixed request EQUALS the constructed expectation** (#46's decision metric) | pass — `unexpected [], missing []` |
 | size-based and decoded counts agree in direction | pass (present 12,540 B / 20 ids; absent 0 B / 0 ids) |
+
+**On the equality assertion (added in review round 1).** An earlier version of this file checked a *superset* (`mix >= PRESENT`) plus an absent check, and said nothing about the peer-only ids — weaker than the set equality #46 pre-registered, and weakened without disclosure. The difficulty is real: the peer-only ids converge at an unpredictable moment, so "the expectation" is defined either side of convergence and not across it. It is now asserted at both defined moments — `mix == PRESENT` before, `mix == PRESENT | PEERONLY` after — with the convergence state printed. The rerun passes it exactly.
 
 The decisive one is step 3: with node2 restarted and **all peers up**, its first answer held **0 of 10 peer-only ids while holding all 20 always-written ids** — divergence localized *per id*, not merely counted, and it converged moments later.
 
