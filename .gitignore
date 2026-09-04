@@ -34,3 +34,5 @@ research/qdrant_index_recall_healing/*.err
 research/qdrant_index_recall_healing/*.pid
 research/qdrant_chaos_loop_timeout/*.log
 research/qdrant_chaos_loop_timeout/*.err
+research/weaviate_probe/weaviate_run/
+research/weaviate_probe/*.log
